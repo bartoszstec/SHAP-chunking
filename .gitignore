@@ -1,0 +1,7 @@
+# Środowisko i cache
+venv/
+__pycache__/
+.idea/
+# Pliki danych
+data/*.arff
+data/*.txt
