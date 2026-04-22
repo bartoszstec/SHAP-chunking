@@ -5,3 +5,4 @@ __pycache__/
 # Pliki danych
 data/*.arff
 data/*.txt
+data/results/*.csv

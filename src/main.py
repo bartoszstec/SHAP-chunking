@@ -2,30 +2,30 @@ import pandas as pd
 from scipy.io import arff
 from river import stream, forest, metrics
 from river import drift
+import os
 
 def evaluate_stream(model, dataset_path):
-    # Inicjalizacja detektorów
+    # Detectors definition
     d_adwin = drift.ADWIN()
     d_ddm = drift.binary.DDM()
     d_pht = drift.PageHinkley()
 
     metric = metrics.Accuracy()  # wyświetlenie metryk
 
-    # 1. Pobierz małą próbkę danych (np. pierwsze 100 rekordów)
+    # ----------
+    # WARM START
+    # ----------
+    sample_range = 100
     dataset_init = stream.iter_arff(dataset_path, target='class')
-    # podebranie 100 pierwszych rekordów z datasetu i zapis do zwykłej tablicy
-    initial_data = [next(dataset_init) for _ in range(100)]
+    initial_data = [next(dataset_init) for _ in range(sample_range)]
 
-    # 2. Wstępne trenowanie (Warm Start) z czyszczeniem
-    print("Rozpoczynam rozgrzewanie modelu...")
-
+    print(f"\nRozpoczynam rozgrzewanie modelu...")
     for i, (x, y) in enumerate(initial_data):
-        # DIAGNOSTYKA: Sprawdźmy co jest w y
+        # Skip first record if None
         if y is None:
-            print(f"Uwaga: Rekord {i} ma pustą etykietę (None)!")
+            # print(f"Uwaga: Rekord {i} ma pustą etykietę (None)!")
             continue
-
-        # Naprawa typów (jeśli y to bajty b'0' lub b'1')
+        # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
 
         try:
@@ -35,24 +35,25 @@ def evaluate_stream(model, dataset_path):
 
     print("Model rozgrzany.")
 
+    # -----------------
+    # PROPER DATA STREAM
+    # -----------------
     drifts_found = {"ADWIN": [], "DDM": [], "PHT": []}
     for i, (x, y) in enumerate(dataset_init):
-
-        # Naprawa typów (jeśli y to bajty b'0' lub b'1')
+        # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
 
-        # KROK 1: Predykcja (Test)
-        # y_pred to wynik, którego model "się domyśla" przed zobaczeniem poprawnej odpowiedzi
+        # Prediction
         y_pred = model.predict_one(x)
 
-        # KROK 2: Aktualizacja metryki
+        # Actualization
         if y_pred is not None:
             metric.update(y, y_pred)
 
-            # Czy jest błąd?
+            # Classification error
             error = 0 if y_pred == y else 1
 
-            # Aktualizacja detektorów
+            # Drift detectors actualization
             d_adwin.update(error)
             d_ddm.update(True if error == 1 else False)
             d_pht.update(error)
@@ -60,44 +61,112 @@ def evaluate_stream(model, dataset_path):
             # wrzucić wartości SHAP dla konkretnej cechy lub wektor ważności cech
 
 
-            # Sprawdzanie dryftu
+            # Check if drift detected
             if d_adwin.drift_detected:
-                print(f"ADWIN wykrył dryft w rekordzie {i + 100}")
-                drifts_found["ADWIN"].append(i + 100)
-
+                # print(f"ADWIN wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["ADWIN"].append(i + sample_range)
             if d_ddm.drift_detected:
-                print(f"DDM wykrył dryft w rekordzie {i + 100}")
-                drifts_found["DDM"].append(i + 100)
-
+                # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["DDM"].append(i + sample_range)
             if d_pht.drift_detected:
-                print(f"PHT wykrył dryft w rekordzie {i + 100}")
-                drifts_found["PHT"].append(i + 100)
+                # print(f"PHT wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["PHT"].append(i + sample_range)
 
 
-        # KROK 3: Nauka (online training) - model aktualizuje swoją wiedzę na podstawie pojedynczego przykładu.
-        # Teraz model dostaje poprawną odpowiedź y i koryguje swoje wagi/drzewa
+        # Online learning
         model.learn_one(x, y)
 
-        # KROK D: Podgląd postępów co 1000 rekordów
+        # Metrics by 1000 records
         if i % 1000 == 0:
             print(f"Rekord: {i} | Aktualne Accuracy: {metric.get():.4f}")
 
-    print(f"\nKońcowe Accuracy: {metric.get():.4f}")
-    print(drifts_found)
+    print(f"Zakończenie streama dla zbioru: {dataset_path}")
+
+    # Extracting information from a file name
+    # Formula: DatasetName_f_F1_F2_p_P_w_W_s_S_r_R
+    # -------> F1, F2 - features used for drift, P - point of drift, W - width of drift, S - number of samples, R - random seed
+    filename = dataset_path.split('/')[-1]
+    parts = filename.split('_')
+    real_drift = int(parts[parts.index('p')+1])
+    width_drift = int(parts[parts.index('w')+1])
+    dataset_name = filename
+
+    # Detection statistics
+    adwin_drift = min([d for d in drifts_found['ADWIN'] if d >= real_drift], default=None)
+    adwin_all_detections = len(drifts_found["ADWIN"]) if drifts_found["ADWIN"] else None
+    ddm_drift = min([d for d in drifts_found['DDM'] if d >= real_drift], default=None)
+    ddm_all_detections = len(drifts_found["DDM"]) if drifts_found["DDM"] else None
+    pht_drift = min([d for d in drifts_found['PHT'] if d >= real_drift], default=None)
+    pht_all_detections = len(drifts_found["PHT"]) if drifts_found["PHT"] else None
+
+    # Returns a dictionary with results for this set
+    return {
+        'Dataset': dataset_name,
+        'Real_Drift': real_drift,
+        'Width_Drift': width_drift,
+        'ADWIN_real_detection': adwin_drift,
+        'ADWIN_all_detections': adwin_all_detections,
+        'DDM_real_detection': ddm_drift,
+        'DDM_all_detections': ddm_all_detections,
+        'PHT_real_detection': pht_drift,
+        'PHT_all_detections': pht_all_detections,
+        'Ending_Accuracy': metric.get()
+    }
+
+def save_final_results(all_results_list):
+    csv_filename = "../data/results/drift_detection_results.csv"
+
+    # Tworzymy DataFrame ze wszystkich wyników naraz
+    df_results = pd.DataFrame(all_results_list)
+
+    # Lista kolumn, które powinny być liczbami całkowitymi
+    int_columns = [
+        'Real_Drift', 'Width_Drift',
+        'ADWIN_real_detection', 'ADWIN_all_detections',
+        'DDM_real_detection', 'DDM_all_detections',
+        'PHT_real_detection', 'PHT_all_detections'
+    ]
+
+    # Wymuszamy typ Int64 (przez duże I) - on obsługuje <null> i nie robi floatów
+    for col in int_columns:
+        if col in df_results.columns:
+            df_results[col] = df_results[col].astype('Int64')
+
+    # Zapis do pliku
+    os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
+    # Sprawdzamy, czy plik już istnieje, żeby wiedzieć czy dodać nagłówek
+    file_exists = os.path.isfile(csv_filename)
+
+    df_results.to_csv(
+        csv_filename,
+        mode='a',  # 'a' oznacza append (dopisywanie)
+        index=False,
+        header=not file_exists  # dodaj nagłówek tylko jeśli plik jest tworzony po raz pierwszy
+    )
+
+    print(f"\nWszystkie wyniki zapisane poprawnie do: {csv_filename}")
+    print(df_results)
 
 def load_datasets():
-    # data paths to data containing obvious concept drift
-    data_paths = [
-        '../data/Agrawal_f_1_2_p_5000_w_1_s_10000_r_7521.arff',
-        '../data/Agrawal_f_2_3_p_5000_w_1_s_10000_r_7110.arff',
-        '../data/Agrawal_f_3_4_p_5000_w_1_s_10000_r_5714.arff',
-        '../data/SEA_f_1_2_p_5000_w_1_s_10000_r_6516.arff',
-        '../data/SEA_f_1_3_p_5000_w_1_s_10000_r_7974.arff',
-        '../data/SEA_f_2_3_p_5000_w_1_s_10000_r_3126.arff',
-        '../data/STAGGER_f_1_2_p_5000_w_1_s_10000_r_2788.arff',
-        '../data/STAGGER_f_1_3_p_5000_w_1_s_10000_r_6346.arff',
-        '../data/STAGGER_f_2_3_p_5000_w_1_s_10000_r_3019.arff'
-        ]
+    # Automatycznie załaduj wszystkie pliki .arff z folderu ../data/
+    data_dir = '../data/'
+    data_paths = []
+
+    # Sprawdzenie czy folder istnieje
+    if not os.path.exists(data_dir):
+        print(f"Błąd: Folder {data_dir} nie istnieje!")
+        return data_paths
+
+    # Znalezienie wszystkich plików .arff w folderze
+    for filename in sorted(os.listdir(data_dir)):
+        if filename.endswith('.arff'):
+            full_path = os.path.join(data_dir, filename)
+            data_paths.append(full_path)
+
+    print(f"Znaleziono {len(data_paths)} plików .arff w folderze {data_dir}")
+    for i, path in enumerate(data_paths):
+        print(f"  {i+1}. {path}")
+
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', 1000)
     # data frames objects
@@ -105,7 +174,7 @@ def load_datasets():
     for path in data_paths:
         df_temp = pd.DataFrame(arff.loadarff(path)[0])
         dfs.append(df_temp)
-    print(f"number of loaded dataframes: {len(dfs)}")
+    print(f"\nnumber of loaded dataframes: {len(dfs)}")
 
     # preview dataframes
     for i, df in enumerate(dfs):
@@ -113,10 +182,19 @@ def load_datasets():
         print(df.head())
     return data_paths
 
-#definicja modelu ARF (Adaptive Random Forest classifier)
-rf_model = forest.ARFClassifier(n_models=10, seed=42)
-
-
+# Saving paths to datasets
 datasets_paths = load_datasets()
-evaluate_stream(rf_model, datasets_paths[0])
 
+#evaluate_stream(rf_model, datasets_paths[4])
+
+# Main tests loop
+all_results = []
+
+for dataset in datasets_paths:
+    # definicja modelu ARF (Adaptive Random Forest classifier)
+    rf_model = forest.ARFClassifier(n_models=10, seed=42)
+
+    one_test_results = evaluate_stream(rf_model, dataset)
+    all_results.append(one_test_results)
+
+save_final_results(all_results)
