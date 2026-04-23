@@ -4,11 +4,31 @@ from river import stream, forest, metrics
 from river import drift
 import os
 
+# Auxiliary functions
+def calculate_latency(drift_founds, point_drift, width_drift):
+    # Koniec okna dryftu (punkt, od którego liczymy 'spóźnienie')
+    drift_end = point_drift + (width_drift / 2)
+
+    # Szukamy pierwszej detekcji, która wystąpiła PO rozpoczęciu dryftu (p - w/2)
+    # Bo detekcja w trakcie trwania zmiany (gradual) też jest sukcesem!
+    drift_start = point_drift - (width_drift / 2)
+    valid_detections = [d for d in drift_founds if d >= drift_start]
+
+    if not valid_detections:
+        return None  # Brak wykrycia dryftu
+
+    first_detection = min(valid_detections)
+
+    # Opóźnienie względem końca okna dryftu
+    # Jeśli wynik jest ujemny, oznacza to, że wykryliśmy dryft w trakcie jego trwania (super!)
+    return first_detection - drift_end
+
 def evaluate_stream(model, dataset_path):
     # Detectors definition
     d_adwin = drift.ADWIN()
     d_ddm = drift.binary.DDM()
     d_pht = drift.PageHinkley()
+    d_kswin = drift.KSWIN()
 
     metric = metrics.Accuracy()  # wyświetlenie metryk
 
@@ -38,7 +58,7 @@ def evaluate_stream(model, dataset_path):
     # -----------------
     # PROPER DATA STREAM
     # -----------------
-    drifts_found = {"ADWIN": [], "DDM": [], "PHT": []}
+    drifts_found = {"ADWIN": [], "KSWIN": [], "DDM": [], "PHT": []}
     for i, (x, y) in enumerate(dataset_init):
         # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
@@ -57,6 +77,7 @@ def evaluate_stream(model, dataset_path):
             d_adwin.update(error)
             d_ddm.update(True if error == 1 else False)
             d_pht.update(error)
+            d_kswin.update(error)
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
             # wrzucić wartości SHAP dla konkretnej cechy lub wektor ważności cech
 
@@ -65,6 +86,9 @@ def evaluate_stream(model, dataset_path):
             if d_adwin.drift_detected:
                 # print(f"ADWIN wykrył dryft w rekordzie {i + sample_range}")
                 drifts_found["ADWIN"].append(i + sample_range)
+            if d_kswin.drift_detected:
+                # print(f"KSWIN wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["KSWIN"].append(i + sample_range)
             if d_ddm.drift_detected:
                 # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
                 drifts_found["DDM"].append(i + sample_range)
@@ -77,39 +101,59 @@ def evaluate_stream(model, dataset_path):
         model.learn_one(x, y)
 
         # Metrics by 1000 records
-        if i % 1000 == 0:
+        if i % 1000 == 0 and i > 0:
             print(f"Rekord: {i} | Aktualne Accuracy: {metric.get():.4f}")
 
-    print(f"Zakończenie streama dla zbioru: {dataset_path}")
+    print(f"Zakończenie strumienia dla zbioru: {dataset_path}")
 
     # Extracting information from a file name
     # Formula: DatasetName_f_F1_F2_p_P_w_W_s_S_r_R
     # -------> F1, F2 - features used for drift, P - point of drift, W - width of drift, S - number of samples, R - random seed
     filename = dataset_path.split('/')[-1]
     parts = filename.split('_')
-    real_drift = int(parts[parts.index('p')+1])
+    point_drift = int(parts[parts.index('p')+1])
     width_drift = int(parts[parts.index('w')+1])
+    samples_number = int(parts[parts.index('s') + 1])
     dataset_name = filename
 
     # Detection statistics
-    adwin_drift = min([d for d in drifts_found['ADWIN'] if d >= real_drift], default=None)
+    adwin_latency = calculate_latency(drifts_found['ADWIN'], point_drift, width_drift)
+    kswin_latency = calculate_latency(drifts_found['KSWIN'], point_drift, width_drift)
+    ddm_latency = calculate_latency(drifts_found['DDM'], point_drift, width_drift)
+    pht_latency = calculate_latency(drifts_found['PHT'], point_drift, width_drift)
+
     adwin_all_detections = len(drifts_found["ADWIN"]) if drifts_found["ADWIN"] else None
-    ddm_drift = min([d for d in drifts_found['DDM'] if d >= real_drift], default=None)
+    kswin_all_detections = len(drifts_found["KSWIN"]) if drifts_found["KSWIN"] else None
     ddm_all_detections = len(drifts_found["DDM"]) if drifts_found["DDM"] else None
-    pht_drift = min([d for d in drifts_found['PHT'] if d >= real_drift], default=None)
     pht_all_detections = len(drifts_found["PHT"]) if drifts_found["PHT"] else None
+
+    adwin_all_str = "; ".join(map(str, drifts_found["ADWIN"])) if drifts_found["ADWIN"] else ""
+    kswin_all_str = "; ".join(map(str, drifts_found["KSWIN"])) if drifts_found["KSWIN"] else ""
+    ddm_all_str = "; ".join(map(str, drifts_found["DDM"])) if drifts_found["DDM"] else ""
+    pht_all_str = "; ".join(map(str, drifts_found["PHT"])) if drifts_found["PHT"] else ""
 
     # Returns a dictionary with results for this set
     return {
         'Dataset': dataset_name,
-        'Real_Drift': real_drift,
+        'Drift_Point': point_drift,
         'Width_Drift': width_drift,
-        'ADWIN_real_detection': adwin_drift,
+        'Samples_Number': samples_number,
+
+        'ADWIN_all_events': adwin_all_str,
+        'KSWIN_all_events': kswin_all_str,
+        'DDM_all_events': ddm_all_str,
+        'PHT_all_events': pht_all_str,
+
         'ADWIN_all_detections': adwin_all_detections,
-        'DDM_real_detection': ddm_drift,
+        'KSWIN_all_detections': kswin_all_detections,
         'DDM_all_detections': ddm_all_detections,
-        'PHT_real_detection': pht_drift,
         'PHT_all_detections': pht_all_detections,
+
+        'ADWIN_latency': adwin_latency,
+        'KSWIN_latency': kswin_latency,
+        'DDM_latency': ddm_latency,
+        'PHT_latency': pht_latency,
+
         'Ending_Accuracy': metric.get()
     }
 
@@ -121,8 +165,9 @@ def save_final_results(all_results_list):
 
     # Lista kolumn, które powinny być liczbami całkowitymi
     int_columns = [
-        'Real_Drift', 'Width_Drift',
+        'point_drift', 'Width_Drift',
         'ADWIN_real_detection', 'ADWIN_all_detections',
+        'KSWIN_real_detection', 'KSWIN_all_detections',
         'DDM_real_detection', 'DDM_all_detections',
         'PHT_real_detection', 'PHT_all_detections'
     ]
@@ -148,8 +193,8 @@ def save_final_results(all_results_list):
     print(df_results)
 
 def load_datasets():
-    # Automatycznie załaduj wszystkie pliki .arff z folderu ../data/
-    data_dir = '../data/'
+    # Automatycznie załaduj wszystkie pliki .arff z folderu ../data/datasets/
+    data_dir = '../data/datasets/'
     data_paths = []
 
     # Sprawdzenie czy folder istnieje
@@ -185,8 +230,6 @@ def load_datasets():
 # Saving paths to datasets
 datasets_paths = load_datasets()
 
-#evaluate_stream(rf_model, datasets_paths[4])
-
 # Main tests loop
 all_results = []
 
@@ -196,5 +239,10 @@ for dataset in datasets_paths:
 
     one_test_results = evaluate_stream(rf_model, dataset)
     all_results.append(one_test_results)
+
+# ONE DATASET TEST
+# rf_model = forest.ARFClassifier(n_models=10, seed=42)
+# one_test_results = evaluate_stream(rf_model, datasets_paths[3])
+# all_results.append(one_test_results)
 
 save_final_results(all_results)
