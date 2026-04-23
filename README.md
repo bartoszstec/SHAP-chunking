@@ -1,7 +1,13 @@
 # SHAP-chunking
 
-## Spostrzeżenia badawcze:
-1) Założenia strategii trenowania modelu: (konieczne określenie kierunku metodyki badawczej przed rozpoczęciem fazy testowej)
-- Podejście **warm start**: trenowanie modelu na danych historycznych, w których concept drift nie występuje (bezpieczne dane), a następnie wpuszczenie modelu do danych strumieniowych
-- Podejście **badawcze**: model uczy się wszystkiego od zera (w locie) - podejście wydaje się trudniejsze do zaimplementowania, ale jest bardziej "pure streaming"
-2) Zamiast używać biblioteki scikit-learn prawdopodobnie zastosowana zostanie biblioteka river dająca więcej możliwości dla obsługi modeli operujących na danych strumieniowych
+## Założenia projektu:
+- Celem projektu jest zbadanie skuteczności różnych detektorów concept driftu w kontekście modeli uczenia maszynowego operujących na danych strumieniowych
+- Projekt będzie obejmował implementację różnych detektorów concept driftu, takich jak ADWIN, KSWIN, DDM, Page-Hinkley
+- Strategia trenowania modelu będzie oparta na podejściu warm start, gdzie model będzie trenowany na danych historycznych, a następnie będzie testowany na danych strumieniowych
+- Główną biblioteką do implementacji modeli uczenia maszynowego będzie river, która jest specjalnie zaprojektowana do pracy z danymi strumieniowymi
+- 
+
+## Planowane kroki:
+1) Zbadanie performance detektorów concept driftu w różnych modelach (np. Random Forest, XGBoost, LightGBM) - porównanie wyników
+2) Zbadanie wpływu różnych parametrów detektorów concept driftu (np. poziom istotności, rozmiar okna) na skuteczność detekcji
+3) Utworzenie metody wykrywania concept driftu przy użyciu SHAP values, możliwie przy wykorzystaniu podejścia insteniejących już detektorów concept driftu, takich jak ADWIN, KSWIN, DDM, Page-Hinkley
