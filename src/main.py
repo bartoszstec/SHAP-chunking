@@ -3,6 +3,7 @@ from scipy.io import arff
 from river import stream, forest, metrics
 from river import drift
 import os
+from D1D2_metrics import D1D2
 
 # Auxiliary functions
 def calculate_latency(drift_founds, point_drift, width_drift):
@@ -26,9 +27,13 @@ def calculate_latency(drift_founds, point_drift, width_drift):
 def evaluate_stream(model, dataset_path):
     # Detectors definition
     d_adwin = drift.ADWIN()
+    # ADWIN Default parameters values: delta → 0.002, clock → 32, max_buckets → 5, min_window_length → 5, grace_period → 20
     d_ddm = drift.binary.DDM()
+    # DDM Default parameters values: warm_start → 30, warning_threshold → 2.0, drift_threshold → 3.0
     d_pht = drift.PageHinkley()
-    d_kswin = drift.KSWIN()
+    # PHT Default parameters values: min_instances → 30, delta → 0.005, threshold → 50, alpha → 0.9999, mode → 'both'
+    d_kswin = drift.KSWIN(window_size=300, stat_size=100, alpha=0.001)
+    # KSWIN Default parameters values: alpha → 0.005, window_size → 100, stat_size → 30, seed → None, window → None
 
     metric = metrics.Accuracy()  # wyświetlenie metryk
 
@@ -73,11 +78,16 @@ def evaluate_stream(model, dataset_path):
             # Classification error
             error = 0 if y_pred == y else 1
 
+            # Class probability
+            proba = model.predict_proba_one(x)
+            true_class_proba = proba.get(y, 0.0)
+
             # Drift detectors actualization
             d_adwin.update(error)
             d_ddm.update(True if error == 1 else False)
             d_pht.update(error)
-            d_kswin.update(error)
+            #d_kswin.update(error) poprzednia metoda
+            d_kswin.update(float(true_class_proba))
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
             # wrzucić wartości SHAP dla konkretnej cechy lub wektor ważności cech
 
@@ -132,7 +142,22 @@ def evaluate_stream(model, dataset_path):
     ddm_all_str = "; ".join(map(str, drifts_found["DDM"])) if drifts_found["DDM"] else ""
     pht_all_str = "; ".join(map(str, drifts_found["PHT"])) if drifts_found["PHT"] else ""
 
-    # Returns a dictionary with results for this set
+    # Calculate D1 and D2 metrics for each detector
+    true_drifts = [point_drift]
+
+    d1_adwin = D1D2.D1(true_drifts, drifts_found['ADWIN'])
+    d2_adwin = D1D2.D2(true_drifts, drifts_found['ADWIN'])
+
+    d1_kswin = D1D2.D1(true_drifts, drifts_found['KSWIN'])
+    d2_kswin = D1D2.D2(true_drifts, drifts_found['KSWIN'])
+
+    d1_ddm = D1D2.D1(true_drifts, drifts_found['DDM'])
+    d2_ddm = D1D2.D2(true_drifts, drifts_found['DDM'])
+
+    d1_pht = D1D2.D1(true_drifts, drifts_found['PHT'])
+    d2_pht = D1D2.D2(true_drifts, drifts_found['PHT'])
+
+    # Returns a dictionary with results for this dataset
     return {
         'Dataset': dataset_name,
         'Drift_Point': point_drift,
@@ -153,6 +178,15 @@ def evaluate_stream(model, dataset_path):
         'KSWIN_latency': kswin_latency,
         'DDM_latency': ddm_latency,
         'PHT_latency': pht_latency,
+
+        'ADWIN_D1': d1_adwin,
+        'ADWIN_D2': d2_adwin,
+        'KSWIN_D1': d1_kswin,
+        'KSWIN_D2': d2_kswin,
+        'DDM_D1': d1_ddm,
+        'DDM_D2': d2_ddm,
+        'PHT_D1': d1_pht,
+        'PHT_D2': d2_pht,
 
         'Ending_Accuracy': metric.get()
     }
@@ -178,19 +212,20 @@ def save_final_results(all_results_list):
             df_results[col] = df_results[col].astype('Int64')
 
     # Zapis do pliku
-    os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
-    # Sprawdzamy, czy plik już istnieje, żeby wiedzieć czy dodać nagłówek
-    file_exists = os.path.isfile(csv_filename)
+    try:
+        os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
+        # Sprawdzamy, czy plik już istnieje, żeby wiedzieć czy dodać nagłówek
+        file_exists = os.path.isfile(csv_filename)
 
-    df_results.to_csv(
-        csv_filename,
-        mode='a',  # 'a' oznacza append (dopisywanie)
-        index=False,
-        header=not file_exists  # dodaj nagłówek tylko jeśli plik jest tworzony po raz pierwszy
-    )
-
-    print(f"\nWszystkie wyniki zapisane poprawnie do: {csv_filename}")
-    print(df_results)
+        df_results.to_csv(
+            csv_filename,
+            mode='a',  # 'a' oznacza append (dopisywanie)
+            index=False,
+            header=not file_exists  # dodaj nagłówek tylko jeśli plik jest tworzony po raz pierwszy
+        )
+        print(f"\nWszystkie wyniki zapisane poprawnie do: {csv_filename}")
+    except Exception as e:
+        print(f"Błąd przy zapisie do pliku {csv_filename}: {e}")
 
 def load_datasets():
     # Automatycznie załaduj wszystkie pliki .arff z folderu ../data/datasets/
@@ -227,22 +262,23 @@ def load_datasets():
         print(df.head())
     return data_paths
 
-# Saving paths to datasets
-datasets_paths = load_datasets()
+if __name__ == "__main__":
+    # Saving paths to datasets
+    datasets_paths = load_datasets()
 
-# Main tests loop
-all_results = []
+    # Main tests loop
+    all_results = []
 
-for dataset in datasets_paths:
-    # definicja modelu ARF (Adaptive Random Forest classifier)
-    rf_model = forest.ARFClassifier(n_models=10, seed=42)
+    for dataset in datasets_paths:
+        # definicja modelu ARF (Adaptive Random Forest classifier)
+        rf_model = forest.ARFClassifier(n_models=10, seed=42)
 
-    one_test_results = evaluate_stream(rf_model, dataset)
-    all_results.append(one_test_results)
+        one_test_results = evaluate_stream(rf_model, dataset)
+        all_results.append(one_test_results)
 
-# ONE DATASET TEST
-# rf_model = forest.ARFClassifier(n_models=10, seed=42)
-# one_test_results = evaluate_stream(rf_model, datasets_paths[3])
-# all_results.append(one_test_results)
+    # ONE DATASET TEST
+    # rf_model = forest.ARFClassifier(n_models=10, seed=42)
+    # one_test_results = evaluate_stream(rf_model, datasets_paths[3])
+    # all_results.append(one_test_results)
 
-save_final_results(all_results)
+    save_final_results(all_results)

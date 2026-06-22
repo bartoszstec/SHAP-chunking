@@ -3,6 +3,4 @@ venv/
 __pycache__/
 .idea/
 # Pliki danych
-data/datasets/*.arff
-data/*.txt
-data/results/*.csv
+/data
