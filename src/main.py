@@ -22,6 +22,12 @@ def calculate_latency(drift_founds, point_drift, width_drift):
     # Opóźnienie względem końca okna dryftu
     return first_detection - drift_start
 
+# R - adjusted ratio of the number of true drifts to the number of detections
+def calculate_r(true_drifts_number, detected_drifts_number):
+    if detected_drifts_number == 0:
+        return None
+    return abs((abs(true_drifts_number) / abs(detected_drifts_number)) - 1)
+
 def evaluate_stream(model, dataset_path):
     # Detectors definition
     d_adwin = drift.ADWIN()
@@ -126,8 +132,9 @@ def evaluate_stream(model, dataset_path):
 
     # -------Prepare values used for next calculations-------
 
-    # Used for D1 and D2 metrics calculations
+    # Variables used for later calculations
     true_drifts = [point_drift]     # list of all true drifts (only one in this case)
+    true_drifts_number = len(true_drifts)  # number of true drifts (only one in this case)
 
     # Sample points where drift was detected by each detector
     adwin_drifts = drifts_found.get("ADWIN", [])
@@ -138,23 +145,40 @@ def evaluate_stream(model, dataset_path):
     # -------Detection statistics-------
 
     # LATENCY - number of samples between the start of the drift and the first detection
-    adwin_latency = calculate_latency(adwin_drifts, point_drift, width_drift)
-    kswin_latency = calculate_latency(kswin_drifts, point_drift, width_drift)
-    ddm_latency = calculate_latency(ddm_drifts, point_drift, width_drift)
-    pht_latency = calculate_latency(pht_drifts, point_drift, width_drift)
+    # adwin_latency = calculate_latency(adwin_drifts, point_drift, width_drift)
+    # kswin_latency = calculate_latency(kswin_drifts, point_drift, width_drift)
+    # ddm_latency = calculate_latency(ddm_drifts, point_drift, width_drift)
+    # pht_latency = calculate_latency(pht_drifts, point_drift, width_drift)
 
-    # ALL DETECTIONS - number of all detections by each detector
-    adwin_all_detections = len(adwin_drifts)
-    kswin_all_detections = len(kswin_drifts)
-    ddm_all_detections = len(ddm_drifts)
-    pht_all_detections = len(pht_drifts)
+    # DETECTIONS - all samples where drift was detected by each detector
+    adwin_detections = "; ".join(map(str, adwin_drifts)) if adwin_drifts else ""
+    kswin_detections = "; ".join(map(str, kswin_drifts)) if kswin_drifts else ""
+    ddm_detections = "; ".join(map(str, ddm_drifts)) if ddm_drifts else ""
+    pht_detections = "; ".join(map(str, pht_drifts)) if pht_drifts else ""
 
-    # ALL EVENTS - all samples where drift was detected by each detector
-    adwin_all_events = "; ".join(map(str, adwin_drifts)) if adwin_drifts else ""
-    kswin_all_events = "; ".join(map(str, kswin_drifts)) if kswin_drifts else ""
-    ddm_all_events = "; ".join(map(str, ddm_drifts)) if ddm_drifts else ""
-    pht_all_events = "; ".join(map(str, pht_drifts)) if pht_drifts else ""
+    # DETECTIONS NUMBER - number of all detections by each detector
+    adwin_detections_number = len(adwin_drifts)
+    kswin_detections_number = len(kswin_drifts)
+    ddm_detections_number = len(ddm_drifts)
+    pht_detections_number = len(pht_drifts)
 
+    # FPR
+    fpr_adwin = D1D2.fpr(true_drifts, adwin_drifts, width_drift)
+    fpr_kswin = D1D2.fpr(true_drifts, kswin_drifts, width_drift)
+    fpr_ddm = D1D2.fpr(true_drifts, ddm_drifts, width_drift)
+    fpr_pht = D1D2.fpr(true_drifts, pht_drifts, width_drift)
+
+    # TPR
+    tpr_adwin = D1D2.tpr(true_drifts, adwin_drifts, width_drift)
+    tpr_kswin = D1D2.tpr(true_drifts, kswin_drifts, width_drift)
+    tpr_ddm = D1D2.tpr(true_drifts, ddm_drifts, width_drift)
+    tpr_pht = D1D2.tpr(true_drifts, pht_drifts, width_drift)
+
+    # R - adjusted ratio of the number of true drifts to the number of detections
+    r_adwin = calculate_r(true_drifts_number, adwin_detections_number)
+    r_kswin = calculate_r(true_drifts_number, kswin_detections_number)
+    r_ddm = calculate_r(true_drifts_number, ddm_detections_number)
+    r_pht = calculate_r(true_drifts_number, pht_detections_number)
 
     # D1 and D2 metrics calculations
     d1_adwin = D1D2.D1(true_drifts, adwin_drifts)
@@ -169,18 +193,6 @@ def evaluate_stream(model, dataset_path):
     d1_pht = D1D2.D1(true_drifts, pht_drifts)
     d2_pht = D1D2.D2(true_drifts, pht_drifts)
 
-    # FPR
-    fpr_adwin = D1D2.fpr(true_drifts, adwin_drifts, width_drift)
-    fpr_kswin = D1D2.fpr(true_drifts, kswin_drifts, width_drift)
-    fpr_ddm = D1D2.fpr(true_drifts, ddm_drifts, width_drift)
-    fpr_pht = D1D2.fpr(true_drifts, pht_drifts, width_drift)
-
-    # TPR
-    tpr_adwin = D1D2.tpr(true_drifts, adwin_drifts, width_drift)
-    tpr_kswin = D1D2.tpr(true_drifts, kswin_drifts, width_drift)
-    tpr_ddm = D1D2.tpr(true_drifts, ddm_drifts, width_drift)
-    tpr_pht = D1D2.tpr(true_drifts, pht_drifts, width_drift)
-
     # Returns a dictionary with results for this dataset
     return {
         'Dataset': dataset_name,
@@ -188,30 +200,35 @@ def evaluate_stream(model, dataset_path):
         'Width_Drift': width_drift,
         'Samples_Number': samples_number,
 
-        'ADWIN_all_events': adwin_all_events,
-        'KSWIN_all_events': kswin_all_events,
-        'DDM_all_events': ddm_all_events,
-        'PHT_all_events': pht_all_events,
+        'ADWIN_detections': adwin_detections,
+        'KSWIN_detections': kswin_detections,
+        'DDM_detections': ddm_detections,
+        'PHT_detections': pht_detections,
 
-        'ADWIN_all_detections': adwin_all_detections,
-        'KSWIN_all_detections': kswin_all_detections,
-        'DDM_all_detections': ddm_all_detections,
-        'PHT_all_detections': pht_all_detections,
+        'ADWIN_detections_number': adwin_detections_number,
+        'KSWIN_detections_number': kswin_detections_number,
+        'DDM_detections_number': ddm_detections_number,
+        'PHT_detections_number': pht_detections_number,
 
-        'ADWIN_false_positives': fpr_adwin,
-        'KSWIN_false_positives': fpr_kswin,
-        'DDM_false_positives': fpr_ddm,
-        'PHT_false_positives': fpr_pht,
+        'ADWIN_false_positives': round(fpr_adwin, 2) if fpr_adwin is not None else None,
+        'KSWIN_false_positives': round(fpr_kswin, 2) if fpr_kswin is not None else None,
+        'DDM_false_positives': round(fpr_ddm, 2) if fpr_ddm is not None else None,
+        'PHT_false_positives': round(fpr_pht, 2) if fpr_pht is not None else None,
 
-        'ADWIN_true_positives': tpr_adwin,
-        'KSWIN_true_positives': tpr_kswin,
-        'DDM_true_positives': tpr_ddm,
-        'PHT_true_positives': tpr_pht,
+        'ADWIN_true_positives': round(tpr_adwin, 2) if tpr_adwin is not None else None,
+        'KSWIN_true_positives': round(tpr_kswin, 2) if tpr_kswin is not None else None,
+        'DDM_true_positives': round(tpr_ddm, 2) if tpr_ddm is not None else None,
+        'PHT_true_positives': round(tpr_pht, 2) if tpr_pht is not None else None,
 
-        'ADWIN_latency': adwin_latency,
-        'KSWIN_latency': kswin_latency,
-        'DDM_latency': ddm_latency,
-        'PHT_latency': pht_latency,
+        # 'ADWIN_latency': adwin_latency,
+        # 'KSWIN_latency': kswin_latency,
+        # 'DDM_latency': ddm_latency,
+        # 'PHT_latency': pht_latency,
+
+        'ADWIN_R': r_adwin if r_adwin is not None else None,
+        'KSWIN_R': r_kswin if r_kswin is not None else None,
+        'DDM_R': r_ddm if r_ddm is not None else None,
+        'PHT_R': r_pht if r_pht is not None else None,
 
         'ADWIN_D1': round(d1_adwin) if d1_adwin is not None else samples_number,
         'ADWIN_D2': round(d2_adwin) if d2_adwin is not None else samples_number,
@@ -236,7 +253,6 @@ def save_final_results(all_results_list):
         'Drift_Point', 'Width_Drift', 'Samples_Number',
         'ADWIN_all_detections', 'KSWIN_all_detections',
         'DDM_all_detections', 'PHT_all_detections',
-        'ADWIN_latency', 'KSWIN_latency', 'DDM_latency', 'PHT_latency',
         'ADWIN_D1', 'ADWIN_D2', 'KSWIN_D1', 'KSWIN_D2',
         'DDM_D1', 'DDM_D2', 'PHT_D1', 'PHT_D2'
     ]

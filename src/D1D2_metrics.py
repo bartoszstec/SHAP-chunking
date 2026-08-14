@@ -14,7 +14,7 @@ class D1D2:
             raise ValueError("Window size must be a value above 0")
         return tg - W, tg + W
 
-    def tpr(true_drifts, detected_points, W):
+    def tpr(true_drifts: list[int], detected_points: list[int], W: int) -> float | None:
         """
         Docstring for TPR
         True positive rate - the ratio of true drifts accruately detected to all true drifts.
@@ -26,6 +26,9 @@ class D1D2:
         :param detected: list of detected drift points
         :param W: detection window size., must be a positive integer. A detection window in the form of [x-W,x+W] is created around each true drift point.
         """
+        if not detected_points:
+            return None
+
         matched = set()
         used_detections = set()
 
@@ -40,7 +43,7 @@ class D1D2:
         tpr = len(matched) / len(true_drifts) if true_drifts else 0.0
         return tpr
 
-    def fpr(true_drifts, detected_points, W):
+    def fpr(true_drifts: list[int], detected_points: list[int], W: int) -> float | None:
         """
         Docstring for FPR
         False positive rate - the ratio of the drifts detected outside the detection window to all detected drifts.
@@ -52,6 +55,9 @@ class D1D2:
         :param detected: list of detected drift points
         :param W: detection window size., must be a positive integer. A detection window in the form of [x-W,x+W] is created around each true drift point.
         """
+        if not detected_points:
+            return None
+
         matched_detections = set()
 
         for tg in true_drifts:
@@ -65,7 +71,7 @@ class D1D2:
         fpr = num_fp / len(detected_points) if detected_points else 0.0
         return fpr
 
-    def fedp(true_drifts, detected_points, W):
+    def fedp(true_drifts: list[int], detected_points: list[int], W: int) -> list[tuple[int, int, int]]:
         """
         FEDP = tf - tg, gdzie tf to PIERWSZY (w sensie czasowym) punkt detekcji w oknie EDR.
         Jeśli brak tf w oknie, dany tg nie wnosi do średniej.
@@ -90,7 +96,7 @@ class D1D2:
                 effective_detections += 1
         return 1 if 1 <= effective_detections <= max_effective else 0
 
-    def D1(true_drifts, detected_points):
+    def D1(true_drifts: list[int], detected_points: list[int]) -> float | None:
         """
          Docstring for D1
          D1 - the average distance from each detected drift point to the closest true drift point
@@ -108,7 +114,7 @@ class D1D2:
         )
         return float(d1)
 
-    def D2(true_drifts, detected_points):
+    def D2(true_drifts: list[int], detected_points: list[int]) -> float | None:
         """
         Docstring for D2
         D2 - the average distance from each true drift point to the closest detected drift point
