@@ -26,7 +26,7 @@ def evaluate_stream(model, dataset_path):
     # Detectors definition
     d_adwin = drift.ADWIN()
     # ADWIN Default parameters values: delta → 0.002, clock → 32, max_buckets → 5, min_window_length → 5, grace_period → 20
-    d_kswin = drift.KSWIN(window_size=300, stat_size=100, alpha=0.001, seed=42)
+    d_kswin = drift.KSWIN()
     # KSWIN Default parameters values: alpha → 0.005, window_size → 100, stat_size → 30, seed → None, window → None
     d_ddm = drift.binary.DDM()
     # DDM Default parameters values: warm_start → 30, warning_threshold → 2.0, drift_threshold → 3.0
@@ -77,13 +77,13 @@ def evaluate_stream(model, dataset_path):
             error = 0 if y_pred == y else 1
 
             # Class probability
-            proba = model.predict_proba_one(x)
-            true_class_proba = proba.get(y, 0.0)
+            # proba = model.predict_proba_one(x)
+            # true_class_proba = proba.get(y, 0.0)
 
             # Drift detectors actualization
             d_adwin.update(error)                           # ADWIN
-            # d_kswin.update(error) poprzednia metoda
-            d_kswin.update(float(true_class_proba))  # KSWIN
+            d_kswin.update(error)                           # KSWIN
+            # d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
             d_ddm.update(True if error == 1 else False)     # DDM
             d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
@@ -233,11 +233,12 @@ def save_final_results(all_results_list):
 
     # Lista kolumn, które powinny być liczbami całkowitymi
     int_columns = [
-        'point_drift', 'Width_Drift',
-        'ADWIN_real_detection', 'ADWIN_all_detections',
-        'KSWIN_real_detection', 'KSWIN_all_detections',
-        'DDM_real_detection', 'DDM_all_detections',
-        'PHT_real_detection', 'PHT_all_detections'
+        'Drift_Point', 'Width_Drift', 'Samples_Number',
+        'ADWIN_all_detections', 'KSWIN_all_detections',
+        'DDM_all_detections', 'PHT_all_detections',
+        'ADWIN_latency', 'KSWIN_latency', 'DDM_latency', 'PHT_latency',
+        'ADWIN_D1', 'ADWIN_D2', 'KSWIN_D1', 'KSWIN_D2',
+        'DDM_D1', 'DDM_D2', 'PHT_D1', 'PHT_D2'
     ]
 
     # Wymuszamy typ Int64 (przez duże I) - on obsługuje <null> i nie robi floatów
