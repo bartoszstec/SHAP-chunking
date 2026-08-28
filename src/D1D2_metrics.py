@@ -43,13 +43,13 @@ class D1D2:
         tpr = len(matched) / len(true_drifts) if true_drifts else 0.0
         return tpr
 
-    def fpr(true_drifts: list[int], detected_points: list[int], W: int) -> float | None:
+    def fdr(true_drifts: list[int], detected_points: list[int], W: int) -> float | None:
         """
-        Docstring for FPR
-        False positive rate - the ratio of the drifts detected outside the detection window to all detected drifts.
+        Docstring for FDR
+        False discovery rate - the ratio of the drifts detected outside the detection window to all detected drifts.
 
         .. math::
-            TPR = \\frac{|t_d \\in T_d : t_d \\notin EDW|}{|T_d|}
+            FDR = \\frac{|t_d \\in T_d : t_d \\notin EDW|}{|T_d|}
 
         :param true_drifts: list of true drift points
         :param detected: list of detected drift points
@@ -68,8 +68,8 @@ class D1D2:
                     # break  # one hit per drift
 
         num_fp = len(detected_points) - len(matched_detections)
-        fpr = num_fp / len(detected_points) if detected_points else 0.0
-        return fpr
+        fdr = num_fp / len(detected_points) if detected_points else 0.0
+        return fdr
 
     def fedp(true_drifts: list[int], detected_points: list[int], W: int) -> list[tuple[int, int, int]]:
         """

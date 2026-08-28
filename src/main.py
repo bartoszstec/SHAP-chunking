@@ -162,11 +162,11 @@ def evaluate_stream(model, dataset_path):
     ddm_detections_number = len(ddm_drifts)
     pht_detections_number = len(pht_drifts)
 
-    # FPR
-    fpr_adwin = D1D2.fpr(true_drifts, adwin_drifts, width_drift)
-    fpr_kswin = D1D2.fpr(true_drifts, kswin_drifts, width_drift)
-    fpr_ddm = D1D2.fpr(true_drifts, ddm_drifts, width_drift)
-    fpr_pht = D1D2.fpr(true_drifts, pht_drifts, width_drift)
+    # FDR
+    fdr_adwin = D1D2.fdr(true_drifts, adwin_drifts, width_drift)
+    fdr_kswin = D1D2.fdr(true_drifts, kswin_drifts, width_drift)
+    fdr_ddm = D1D2.fdr(true_drifts, ddm_drifts, width_drift)
+    fdr_pht = D1D2.fdr(true_drifts, pht_drifts, width_drift)
 
     # TPR
     tpr_adwin = D1D2.tpr(true_drifts, adwin_drifts, width_drift)
@@ -210,15 +210,15 @@ def evaluate_stream(model, dataset_path):
         'DDM_detections_number': ddm_detections_number,
         'PHT_detections_number': pht_detections_number,
 
-        'ADWIN_false_positives': round(fpr_adwin, 2) if fpr_adwin is not None else None,
-        'KSWIN_false_positives': round(fpr_kswin, 2) if fpr_kswin is not None else None,
-        'DDM_false_positives': round(fpr_ddm, 2) if fpr_ddm is not None else None,
-        'PHT_false_positives': round(fpr_pht, 2) if fpr_pht is not None else None,
+        'ADWIN_false_discovery_rate': round(fdr_adwin, 2) if fdr_adwin is not None else None,
+        'KSWIN_false_discovery_rate': round(fdr_kswin, 2) if fdr_kswin is not None else None,
+        'DDM_false_discovery_rate': round(fdr_ddm, 2) if fdr_ddm is not None else None,
+        'PHT_false_discovery_rate': round(fdr_pht, 2) if fdr_pht is not None else None,
 
-        'ADWIN_true_positives': round(tpr_adwin, 2) if tpr_adwin is not None else None,
-        'KSWIN_true_positives': round(tpr_kswin, 2) if tpr_kswin is not None else None,
-        'DDM_true_positives': round(tpr_ddm, 2) if tpr_ddm is not None else None,
-        'PHT_true_positives': round(tpr_pht, 2) if tpr_pht is not None else None,
+        'ADWIN_true_positive_rate': round(tpr_adwin, 2) if tpr_adwin is not None else None,
+        'KSWIN_true_positive_rate': round(tpr_kswin, 2) if tpr_kswin is not None else None,
+        'DDM_true_positive_rate': round(tpr_ddm, 2) if tpr_ddm is not None else None,
+        'PHT_true_positive_rate': round(tpr_pht, 2) if tpr_pht is not None else None,
 
         # 'ADWIN_latency': adwin_latency,
         # 'KSWIN_latency': kswin_latency,
