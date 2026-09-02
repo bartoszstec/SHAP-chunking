@@ -26,8 +26,6 @@ class D1D2:
         :param detected: list of detected drift points
         :param W: detection window size., must be a positive integer. A detection window in the form of [x-W,x+W] is created around each true drift point.
         """
-        if not detected_points:
-            return None
 
         matched = set()
         used_detections = set()
@@ -68,7 +66,7 @@ class D1D2:
                     # break  # one hit per drift
 
         num_fp = len(detected_points) - len(matched_detections)
-        fdr = num_fp / len(detected_points) if detected_points else 0.0
+        fdr = num_fp / len(detected_points) #if detected_points else 0.0
         return fdr
 
     def fedp(true_drifts: list[int], detected_points: list[int], W: int) -> list[tuple[int, int, int]]:
