@@ -1,96 +1,86 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-import os
+from pathlib import Path
 
 
 def load_data(file_path):
-    if not os.path.exists(file_path):
+    if not Path(file_path).exists():
         print(f"Błąd: Plik {file_path} nie istnieje!")
         return None
     return pd.read_csv(file_path)
 
 
-def plot_latency_comparison(df):
-    """Generuje wykres słupkowy porównujący opóźnienie detektorów."""
-    plt.figure(figsize=(14, 7))
+def plot_metrics(df):
+    # Implementacja wykresu zbiorczego metryk dla wszystkich zestawów danych
+    # wykres zawiera metryki: uśrednione ze wszystkich datasetów FDR, TPR, R, D1, D2 osobno dla każdego detektora
+    detectors = ['ADWIN', 'KSWIN', 'DDM', 'PHT']
+    metrics = {
+        'FDR': 'false_discovery_rate',
+        'TPR': 'true_positive_rate',
+        'R': 'R',
+        'D1': 'D1',
+        'D2': 'D2',
+    }
 
-    # Przekształcenie danych do formatu "long" dla Seaborn
-    latency_cols = ['ADWIN_latency', 'KSWIN_latency', 'DDM_latency', 'PHT_latency']
-    # Upewniamy się, że bierzemy tylko te kolumny, które istnieją
-    existing_cols = [c for c in latency_cols if c in df.columns]
+    # Wyliczenie średnich (pomijając braki danych, np. gdy detektor nic nie wykrył)
+    summary = pd.DataFrame(index=metrics.keys(), columns=detectors, dtype=float)
+    for det in detectors:
+        for metric_label, metric_suffix in metrics.items():
+            col_name = f'{det}_{metric_suffix}'
+            summary.loc[metric_label, det] = df[col_name].mean(skipna=True)
 
-    df_melted = df.melt(id_vars=['Dataset'], value_vars=existing_cols,
-                        var_name='Detector', value_name='Latency')
+    # FDR/TPR/R są w skali 0-1, a D1/D2 to opóźnienia liczone w próbkach (rząd tysięcy),
+    # więc rysujemy je na dwóch osobnych podwykresach, żeby oba były czytelne.
+    rate_metrics = ['FDR', 'TPR', 'R']
+    delay_metrics = ['D1', 'D2']
 
-    # Czyszczenie nazw detektorów (usuwanie '_latency')
-    df_melted['Detector'] = df_melted['Detector'].str.replace('_latency', '')
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    sns.barplot(data=df_melted, x='Dataset', y='Latency', hue='Detector')
+    summary.loc[rate_metrics].plot(kind='bar', ax=ax1, edgecolor='black', legend=False)
+    ax1.set_title('Wskaźniki jakości detekcji (0-1)')
+    ax1.set_xlabel('Metryka')
+    ax1.set_ylabel('Wartość średnia')
+    ax1.grid(axis='y', linestyle=':', alpha=0.6)
+    ax1.tick_params(axis='x', rotation=0)
 
-    plt.xticks(rotation=45, ha='right')
-    plt.axhline(0, color='black', linewidth=1, linestyle='--')
-    plt.title('Porównanie opóźnienia detekcji (Latency)\nUjemne wartości = wykrycie w trakcie trwania dryftu',
-              fontsize=14)
-    plt.ylabel('Opóźnienie (liczba rekordów)')
-    plt.xlabel('Zbiór danych')
-    plt.legend(title='Detektor')
+    summary.loc[delay_metrics].plot(kind='bar', ax=ax2, edgecolor='black')
+    ax2.set_title('Opóźnienia detekcji (w próbkach)')
+    ax2.set_xlabel('Metryka')
+    ax2.set_ylabel('Wartość średnia')
+    ax2.legend(title='Detektor')
+    ax2.grid(axis='y', linestyle=':', alpha=0.6)
+    ax2.tick_params(axis='x', rotation=0)
+
+    fig.suptitle('Uśrednione metryki detekcji dla poszczególnych detektorów', fontsize=14)
     plt.tight_layout()
-    plt.savefig('../data/graphs/latency_comparison.png')
-    plt.show()
 
-def plot_d1_d2_comparison(df):
-    """Generuje dwa wykresy słupkowe porównujące metryki D1 i D2 detektorów oddzielnie."""
+    Path('../data/graphs').mkdir(parents=True, exist_ok=True)
+    plt.savefig('../data/graphs/metrics_summary.png')
+    plt.close()
 
-    # ========== WYKRES D1 ==========
-    plt.figure(figsize=(14, 7))
 
-    # Lista kolumn D1
-    d1_cols = ['ADWIN_D1', 'KSWIN_D1', 'DDM_D1', 'PHT_D1']
-    existing_d1_cols = [c for c in d1_cols if c in df.columns]
+def plot_datasets(df):
+    # Implementacja wykresu zbiorczego liczby detekcji względem każdego zestawu danych
+    # wykres zawiera liczbę detekcji dla każdego zestawu danych osobno dla każdego detektora
+    detectors = ['ADWIN', 'KSWIN', 'DDM', 'PHT']
+    cols = [f'{det}_detections_number' for det in detectors]
 
-    df_d1_melted = df.melt(id_vars=['Dataset'], value_vars=existing_d1_cols,
-                           var_name='Detector', value_name='D1_Value')
+    counts = df[cols].copy()
+    counts.columns = detectors
+    counts.index = df['Dataset'].str.replace('.arff', '', regex=False)
 
-    # Czyszczenie nazw detektorów
-    df_d1_melted['Detector'] = df_d1_melted['Detector'].str.replace('_D1', '')
-
-    sns.barplot(data=df_d1_melted, x='Dataset', y='D1_Value', hue='Detector')
-
-    plt.xticks(rotation=45, ha='right')
-    plt.title('Porównanie metryki D1 detektorów\nNiższe wartości = lepsza detekcja',
-              fontsize=14)
-    plt.ylabel('Wartość D1 (średnia odległość od każdej detekcji do najbliższego prawdziwego dryftu)')
-    plt.xlabel('Zbiór danych')
-    plt.legend(title='Detektor')
+    ax = counts.plot(kind='bar', figsize=(16, 7), edgecolor='black')
+    ax.set_title('Liczba detekcji dla każdego zestawu danych', fontsize=14)
+    ax.set_xlabel('Zestaw danych')
+    ax.set_ylabel('Liczba detekcji')
+    ax.legend(title='Detektor')
+    ax.grid(axis='y', linestyle=':', alpha=0.6)
+    plt.xticks(rotation=75, ha='right')
     plt.tight_layout()
-    plt.savefig('../data/graphs/d1_comparison.png', dpi=300, bbox_inches='tight')
-    plt.show()
 
-    # ========== WYKRES D2 ==========
-    plt.figure(figsize=(14, 7))
-
-    # Lista kolumn D2
-    d2_cols = ['ADWIN_D2', 'KSWIN_D2', 'DDM_D2', 'PHT_D2']
-    existing_d2_cols = [c for c in d2_cols if c in df.columns]
-
-    df_d2_melted = df.melt(id_vars=['Dataset'], value_vars=existing_d2_cols,
-                           var_name='Detector', value_name='D2_Value')
-
-    # Czyszczenie nazw detektorów
-    df_d2_melted['Detector'] = df_d2_melted['Detector'].str.replace('_D2', '')
-
-    sns.barplot(data=df_d2_melted, x='Dataset', y='D2_Value', hue='Detector')
-
-    plt.xticks(rotation=45, ha='right')
-    plt.title('Porównanie metryki D2 detektorów\nNiższe wartości = lepsza detekcja',
-              fontsize=14)
-    plt.ylabel('Wartość D2 (średnia odległość od każdego prawdziwego dryftu do najbliższej detekcji)')
-    plt.xlabel('Zbiór danych')
-    plt.legend(title='Detektor')
-    plt.tight_layout()
-    plt.savefig('../data/graphs/d2_comparison.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    Path('../data/graphs').mkdir(parents=True, exist_ok=True)
+    plt.savefig('../data/graphs/datasets_summary.png')
+    plt.close()
 
 
 def plot_drift_timeline(df, dataset_index=0):
@@ -113,7 +103,7 @@ def plot_drift_timeline(df, dataset_index=0):
     colors = ['blue', 'green', 'orange', 'purple']
 
     for i, det in enumerate(detectors):
-        col_name = f'{det}_all_events'
+        col_name = f'{det}_detections'
         if col_name in df.columns and pd.notna(row[col_name]):
             events = [float(e) for e in str(row[col_name]).split('; ') if e.strip()]
             plt.scatter(events, [i] * len(events), label=det, color=colors[i], s=100, edgecolors='black')
@@ -128,7 +118,6 @@ def plot_drift_timeline(df, dataset_index=0):
     plt.tight_layout()
     plt.savefig(f'../data/graphs/timeline_{dataset_name.split(".")[0]}.png')
 
-
 if __name__ == "__main__":
     # Ścieżka do Twojego pliku wygenerowanego przez main.py
     FILE_PATH = "../data/results/drift_detection_results.csv"
@@ -137,10 +126,10 @@ if __name__ == "__main__":
 
     if results_df is not None:
         # 1. Wykres zbiorczy opóźnień
-        plot_latency_comparison(results_df)
+        plot_metrics(results_df)
 
         # 2. Wykres zbiorczy opóźnień
-        plot_d1_d2_comparison(results_df)
+        plot_datasets(results_df)
 
         # 3. Wykres osi czasu dla pierwszego zbioru (możesz zmienić indeks)
         # Np. dla Agrawal Gradual lub SEA

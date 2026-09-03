@@ -2,14 +2,15 @@ import numpy as np
 
 
 class D1D2:
-    def get_window(tg, W):
+    def get_window(tg, W, W_min=100):
         """
         Docstring for get_window
 
         :param tg: int: true drift point
         :param W: int: Constant offset
         """
-        W = round(W)
+        W = max(round(W), W_min)
+        #W = round(W)
         if W <= 0:
             raise ValueError("Window size must be a value above 0")
         return tg - W, tg + W

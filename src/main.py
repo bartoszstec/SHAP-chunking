@@ -1,3 +1,4 @@
+from pathlib import Path
 import pandas as pd
 from scipy.io import arff
 from river import stream, forest, metrics
@@ -7,21 +8,6 @@ from D1D2_metrics import D1D2
 from datetime import datetime
 
 # Auxiliary functions
-def calculate_latency(drift_founds, point_drift, width_drift):
-
-    # Szukamy pierwszej detekcji, która wystąpiła PO rozpoczęciu dryftu (p - w/2)
-    # Bo detekcja w trakcie trwania zmiany (gradual) też jest sukcesem!
-    drift_start = point_drift - (width_drift / 2)
-    valid_detections = [d for d in drift_founds if d >= drift_start]
-
-    if not valid_detections:
-        return None  # Brak wykrycia dryftu
-
-    first_detection = min(valid_detections)
-
-    # Opóźnienie względem końca okna dryftu
-    return first_detection - drift_start
-
 # R - adjusted ratio of the number of true drifts to the number of detections
 def calculate_r(true_drifts_number, detected_drifts_number):
     if detected_drifts_number == 0:
@@ -32,7 +18,7 @@ def evaluate_stream(model, dataset_path):
     # Detectors definition
     d_adwin = drift.ADWIN()
     # ADWIN Default parameters values: delta → 0.002, clock → 32, max_buckets → 5, min_window_length → 5, grace_period → 20
-    d_kswin = drift.KSWIN()
+    d_kswin = drift.KSWIN(seed=42)
     # KSWIN Default parameters values: alpha → 0.005, window_size → 100, stat_size → 30, seed → None, window → None
     d_ddm = drift.binary.DDM()
     # DDM Default parameters values: warm_start → 30, warning_threshold → 2.0, drift_threshold → 3.0
@@ -83,13 +69,13 @@ def evaluate_stream(model, dataset_path):
             error = 0 if y_pred == y else 1
 
             # Class probability
-            # proba = model.predict_proba_one(x)
-            # true_class_proba = proba.get(y, 0.0)
+            #proba = model.predict_proba_one(x)
+            #true_class_proba = proba.get(y, 0.0)
 
             # Drift detectors actualization
             d_adwin.update(error)                           # ADWIN
             d_kswin.update(error)                           # KSWIN
-            # d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
+            #d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
             d_ddm.update(True if error == 1 else False)     # DDM
             d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
@@ -143,12 +129,6 @@ def evaluate_stream(model, dataset_path):
     pht_drifts = drifts_found.get("PHT", [])
 
     # -------Detection statistics-------
-
-    # LATENCY - number of samples between the start of the drift and the first detection
-    # adwin_latency = calculate_latency(adwin_drifts, point_drift, width_drift)
-    # kswin_latency = calculate_latency(kswin_drifts, point_drift, width_drift)
-    # ddm_latency = calculate_latency(ddm_drifts, point_drift, width_drift)
-    # pht_latency = calculate_latency(pht_drifts, point_drift, width_drift)
 
     # DETECTIONS - all samples where drift was detected by each detector
     adwin_detections = "; ".join(map(str, adwin_drifts)) if adwin_drifts else ""
@@ -220,15 +200,10 @@ def evaluate_stream(model, dataset_path):
         'DDM_true_positive_rate': round(tpr_ddm, 2) if tpr_ddm is not None else None,
         'PHT_true_positive_rate': round(tpr_pht, 2) if tpr_pht is not None else None,
 
-        # 'ADWIN_latency': adwin_latency,
-        # 'KSWIN_latency': kswin_latency,
-        # 'DDM_latency': ddm_latency,
-        # 'PHT_latency': pht_latency,
-
-        'ADWIN_R': r_adwin if r_adwin is not None else None,
-        'KSWIN_R': r_kswin if r_kswin is not None else None,
-        'DDM_R': r_ddm if r_ddm is not None else None,
-        'PHT_R': r_pht if r_pht is not None else None,
+        'ADWIN_R': round(r_adwin, 2) if r_adwin is not None else samples_number,
+        'KSWIN_R': round(r_kswin, 2) if r_kswin is not None else samples_number,
+        'DDM_R': round(r_ddm, 2) if r_ddm is not None else samples_number,
+        'PHT_R': round(r_pht, 2) if r_pht is not None else samples_number,
 
         'ADWIN_D1': round(d1_adwin) if d1_adwin is not None else samples_number,
         'ADWIN_D2': round(d2_adwin) if d2_adwin is not None else samples_number,
@@ -243,7 +218,7 @@ def evaluate_stream(model, dataset_path):
     }
 
 def save_final_results(all_results_list):
-    csv_filename = "../data/results/drift_detection_results.csv"
+    csv_path = Path("../data/results/drift_detection_results.csv")
 
     # Tworzymy DataFrame ze wszystkich wyników naraz
     df_results = pd.DataFrame(all_results_list)
@@ -264,42 +239,37 @@ def save_final_results(all_results_list):
 
     # Zapis do pliku - jeśli plik istnieje, dopisujemy numer do nazwy (drift_detection_results_1.csv, _2, ...)
     try:
-        dir_name = os.path.dirname(csv_filename) or '.'
-        os.makedirs(dir_name, exist_ok=True)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-        base_name = os.path.basename(csv_filename)
-        name, ext = os.path.splitext(base_name)
-
-        target_path = os.path.join(dir_name, base_name)
+        target_path = csv_path
         counter = 1
         # Szukamy dostępnej nazwy pliku
-        while os.path.exists(target_path):
-            target_path = os.path.join(dir_name, f"{name}_{counter}{ext}")
+        while target_path.exists():
+            target_path = csv_path.parent / f"{csv_path.stem}_{counter}{csv_path.suffix}"
             counter += 1
 
         # Zapisujemy nowy plik (zawsze zapisujemy pełny DataFrame w nowym pliku)
         df_results.to_csv(target_path, index=False)
-        print(f"\nWszystkie wyniki zapisane poprawnie do: {target_path}")
+        print(f"\nWszystkie wyniki zapisane poprawnie do: {target_path.as_posix()}")
     except Exception as e:
-        print(f"Błąd przy zapisie do pliku {csv_filename}: {e}")
+        print(f"Błąd przy zapisie do pliku {csv_path.as_posix()}: {e}")
 
 def load_datasets():
     # Automatycznie załaduj wszystkie pliki .arff z folderu ../data/datasets/
-    data_dir = '../data/datasets/'
+    data_dir = Path("../data/datasets/")
     data_paths = []
 
     # Sprawdzenie czy folder istnieje
-    if not os.path.exists(data_dir):
-        print(f"Błąd: Folder {data_dir} nie istnieje!")
-        return data_paths
+    if not data_dir.is_dir():
+        print(f"Błąd: Folder {data_dir.as_posix()} nie istnieje!")
+        return []
 
     # Znalezienie wszystkich plików .arff w folderze
-    for filename in sorted(os.listdir(data_dir)):
-        if filename.endswith('.arff'):
-            full_path = os.path.join(data_dir, filename)
-            data_paths.append(full_path)
+    data_paths = [
+        p.as_posix() for p in sorted(data_dir.glob("*.arff")) if p.is_file()
+    ]
 
-    print(f"Znaleziono {len(data_paths)} plików .arff w folderze {data_dir}")
+    print(f"Znaleziono {len(data_paths)} plików .arff w folderze {data_dir.as_posix()}")
     for i, path in enumerate(data_paths):
         print(f"  {i+1}. {path}")
 
