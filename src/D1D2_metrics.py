@@ -2,18 +2,23 @@ import numpy as np
 
 
 class D1D2:
-    def get_window(tg, W, W_min=100):
+    def get_window(tg, W, abrupt_tolerance=250):
         """
         Docstring for get_window
 
         :param tg: int: true drift point
         :param W: int: Constant offset
+        :param abrupt_tolerance: int: Tolerance for abrupt drifts
         """
-        W = max(round(W), W_min)
-        #W = round(W)
+        W = round(W)
         if W <= 0:
             raise ValueError("Window size must be a value above 0")
-        return tg - W, tg + W
+        elif W == 1:
+            return tg, tg + abrupt_tolerance
+        else:
+            return tg - 1/2 * W, tg + 1/2 * W
+
+
 
     def tpr(true_drifts: list[int], detected_points: list[int], W: int) -> float | None:
         """
@@ -64,7 +69,7 @@ class D1D2:
             for i, tf in enumerate(detected_points):
                 if i not in matched_detections and window_start <= tf <= window_end:
                     matched_detections.add(i)
-                    # break  # one hit per drift
+                    break  # one hit per drift
 
         num_fp = len(detected_points) - len(matched_detections)
         fdr = num_fp / len(detected_points) #if detected_points else 0.0

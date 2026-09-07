@@ -3,7 +3,6 @@ import pandas as pd
 from scipy.io import arff
 from river import stream, forest, metrics
 from river import drift
-import os
 from D1D2_metrics import D1D2
 from datetime import datetime
 
@@ -69,13 +68,13 @@ def evaluate_stream(model, dataset_path):
             error = 0 if y_pred == y else 1
 
             # Class probability
-            #proba = model.predict_proba_one(x)
-            #true_class_proba = proba.get(y, 0.0)
+            proba = model.predict_proba_one(x)
+            true_class_proba = proba.get(y, 0.0)
 
             # Drift detectors actualization
             d_adwin.update(error)                           # ADWIN
-            d_kswin.update(error)                           # KSWIN
-            #d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
+            #d_kswin.update(error)                           # KSWIN
+            d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
             d_ddm.update(True if error == 1 else False)     # DDM
             d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
@@ -218,7 +217,7 @@ def evaluate_stream(model, dataset_path):
     }
 
 def save_final_results(all_results_list):
-    csv_path = Path("../data/results/drift_detection_results.csv")
+    csv_path = Path("../data/results/drift_detectors_results.csv")
 
     # Tworzymy DataFrame ze wszystkich wyników naraz
     df_results = pd.DataFrame(all_results_list)
@@ -299,7 +298,7 @@ if __name__ == "__main__":
 
     for dataset in datasets_paths:
         # definicja modelu ARF (Adaptive Random Forest classifier)
-        rf_model = forest.ARFClassifier(n_models=10, seed=42)
+        rf_model = forest.ARFClassifier(n_models=10, seed=42, drift_detector=None, warning_detector=None)
 
         one_test_results = evaluate_stream(rf_model, dataset)
         all_results.append(one_test_results)
