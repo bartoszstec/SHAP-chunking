@@ -4,7 +4,7 @@ Usage:
   python compute_detector_stats.py [--csv PATH] [--detectors LIST] [--metrics LIST]
 
 Defaults:
-  csv: ../results/drift_detectors_results.csv
+  csv: ../results/drift_detectors_stats.csv
   detectors: ADWIN,KSWIN,DDM,PHT
   metrics (column suffixes after "<DETECTOR>_"): false_discovery_rate,true_positive_rate,R,D1,D2
 
@@ -19,7 +19,7 @@ import pandas as pd
 def main():
     parser = argparse.ArgumentParser(description="Compute mean and std of detector metrics and display as table")
 
-    parser.add_argument("--csv", default="../data/results/drift_detectors_results.csv", help="Path to CSV file")
+    parser.add_argument("--csv", default="../data/results/drift_detectors_results_1.csv", help="Path to CSV file")
     parser.add_argument("--detectors", default="ADWIN,KSWIN,DDM,PHT", help="Comma-separated detector name prefixes")
     parser.add_argument(
         "--metrics",

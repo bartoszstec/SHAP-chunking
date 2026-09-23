@@ -1,8 +1,8 @@
 from pathlib import Path
 import pandas as pd
 from scipy.io import arff
-from river import stream, forest, metrics
-from river import drift
+import numbers
+from river import stream, naive_bayes, metrics, drift, compose, preprocessing
 from D1D2_metrics import D1D2
 from datetime import datetime
 
@@ -12,6 +12,54 @@ def calculate_r(true_drifts_number, detected_drifts_number):
     if detected_drifts_number == 0:
         return None
     return abs((abs(true_drifts_number) / abs(detected_drifts_number)) - 1)
+
+def build_model():
+    return compose.Pipeline(
+        compose.TransformerUnion(
+            compose.SelectType(numbers.Number),
+            compose.SelectType(str) | preprocessing.OneHotEncoder()
+        ),
+        naive_bayes.GaussianNB()
+    )
+
+
+# Extracting information from a file name
+# Formula: DatasetName_f_F1_F2_p_P_w_W_s_S_r_R
+# -------> F1, F2 - features used for drift, P - point of drift, W - width of drift, S - number of samples, R - random seed
+def parse_filename(dataset_path):
+    # Formula: Name_f_F1_F2..._p_P1_P2..._w_W1_W2..._s_S_r_R  (p i w opcjonalne)
+    stem = Path(dataset_path).stem          # bez '.arff'
+    parts = stem.split('_')
+    markers = {'f', 'p', 'w', 's', 'r'}
+
+    info = {'name': parts[0]}
+    key = None
+    for tok in parts[1:]:
+        if tok in markers:
+            key = tok
+            info[key] = []
+        elif key is not None:
+            info[key].append(int(tok))
+    return info
+
+def detection_rates(true_drifts, detections, widths):
+    """TPR i FDR z osobną szerokością okna dla każdego dryftu (bez modyfikacji D1D2)."""
+    if not true_drifts:
+        # Brak dryftu: każda detekcja to fałszywy alarm, TPR niezdefiniowane
+        fdr = 1.0 if detections else None
+        return None, fdr
+
+    # Założenie: okna kolejnych dryftów się nie nakładają
+    windows = [D1D2.get_window(tg, w) for tg, w in zip(true_drifts, widths)]
+    for (_, end_prev), (start_next, _) in zip(windows, windows[1:]):
+        assert end_prev < start_next, f"Okna dryftów się nakładają: {windows}"
+
+    matched = int(sum(D1D2.tpr([tg], detections, w)
+                      for tg, w in zip(true_drifts, widths)))
+
+    tpr = matched / len(true_drifts)
+    fdr = (len(detections) - matched) / len(detections) if detections else None
+    return tpr, fdr
 
 def evaluate_stream(model, dataset_path):
     # Detectors definition
@@ -59,6 +107,9 @@ def evaluate_stream(model, dataset_path):
 
         # Prediction
         y_pred = model.predict_one(x)
+        proba = model.predict_proba_one(x) # Class probability
+        true_class_proba = proba.get(y, 0.0)
+        # print(f"\ny_pred: {y_pred}, \nproba: {proba}, \ntrue_class_proba: {true_class_proba}")
 
         # Actualization
         if y_pred is not None:
@@ -66,10 +117,6 @@ def evaluate_stream(model, dataset_path):
 
             # Classification error
             error = 0 if y_pred == y else 1
-
-            # Class probability
-            proba = model.predict_proba_one(x)
-            true_class_proba = proba.get(y, 0.0)
 
             # Drift detectors actualization
             d_adwin.update(error)                           # ADWIN
@@ -105,116 +152,40 @@ def evaluate_stream(model, dataset_path):
 
     print(f"Zakończenie strumienia dla zbioru: {dataset_path}")
 
-    # Extracting information from a file name
-    # Formula: DatasetName_f_F1_F2_p_P_w_W_s_S_r_R
-    # -------> F1, F2 - features used for drift, P - point of drift, W - width of drift, S - number of samples, R - random seed
-    filename = dataset_path.split('/')[-1]
-    parts = filename.split('_')
-    point_drift = int(parts[parts.index('p')+1])
-    width_drift = int(parts[parts.index('w')+1])
-    samples_number = int(parts[parts.index('s') + 1])
-    dataset_name = filename
+    # Parse dataset filename to extract drift information
+    info = parse_filename(dataset_path)
+    dataset_name = Path(dataset_path).name
+    true_drifts = info.get('p', [])  # list of all true drifts
+    widths = info.get('w', [])
+    samples_number = info['s'][0]
+    # true_drifts_number = len(true_drifts) # number of true drifts
 
-    # -------Prepare values used for next calculations-------
-
-    # Variables used for later calculations
-    true_drifts = [point_drift]     # list of all true drifts (only one in this case)
-    true_drifts_number = len(true_drifts)  # number of true drifts (only one in this case)
-
-    # Sample points where drift was detected by each detector
-    adwin_drifts = drifts_found.get("ADWIN", [])
-    kswin_drifts = drifts_found.get("KSWIN", [])
-    ddm_drifts = drifts_found.get("DDM", [])
-    pht_drifts = drifts_found.get("PHT", [])
-
-    # -------Detection statistics-------
-
-    # DETECTIONS - all samples where drift was detected by each detector
-    adwin_detections = "; ".join(map(str, adwin_drifts)) if adwin_drifts else ""
-    kswin_detections = "; ".join(map(str, kswin_drifts)) if kswin_drifts else ""
-    ddm_detections = "; ".join(map(str, ddm_drifts)) if ddm_drifts else ""
-    pht_detections = "; ".join(map(str, pht_drifts)) if pht_drifts else ""
-
-    # DETECTIONS NUMBER - number of all detections by each detector
-    adwin_detections_number = len(adwin_drifts)
-    kswin_detections_number = len(kswin_drifts)
-    ddm_detections_number = len(ddm_drifts)
-    pht_detections_number = len(pht_drifts)
-
-    # FDR
-    fdr_adwin = D1D2.fdr(true_drifts, adwin_drifts, width_drift)
-    fdr_kswin = D1D2.fdr(true_drifts, kswin_drifts, width_drift)
-    fdr_ddm = D1D2.fdr(true_drifts, ddm_drifts, width_drift)
-    fdr_pht = D1D2.fdr(true_drifts, pht_drifts, width_drift)
-
-    # TPR
-    tpr_adwin = D1D2.tpr(true_drifts, adwin_drifts, width_drift)
-    tpr_kswin = D1D2.tpr(true_drifts, kswin_drifts, width_drift)
-    tpr_ddm = D1D2.tpr(true_drifts, ddm_drifts, width_drift)
-    tpr_pht = D1D2.tpr(true_drifts, pht_drifts, width_drift)
-
-    # R - adjusted ratio of the number of true drifts to the number of detections
-    r_adwin = calculate_r(true_drifts_number, adwin_detections_number)
-    r_kswin = calculate_r(true_drifts_number, kswin_detections_number)
-    r_ddm = calculate_r(true_drifts_number, ddm_detections_number)
-    r_pht = calculate_r(true_drifts_number, pht_detections_number)
-
-    # D1 and D2 metrics calculations
-    d1_adwin = D1D2.D1(true_drifts, adwin_drifts)
-    d2_adwin = D1D2.D2(true_drifts, adwin_drifts)
-
-    d1_kswin = D1D2.D1(true_drifts, kswin_drifts)
-    d2_kswin = D1D2.D2(true_drifts, kswin_drifts)
-
-    d1_ddm = D1D2.D1(true_drifts, ddm_drifts)
-    d2_ddm = D1D2.D2(true_drifts, ddm_drifts)
-
-    d1_pht = D1D2.D1(true_drifts, pht_drifts)
-    d2_pht = D1D2.D2(true_drifts, pht_drifts)
 
     # Returns a dictionary with results for this dataset
-    return {
+    results = {
         'Dataset': dataset_name,
-        'Drift_Point': point_drift,
-        'Width_Drift': width_drift,
+        'Drift_Point': "; ".join(map(str, true_drifts)),
+        'Width_Drift': "; ".join(map(str, widths)),
         'Samples_Number': samples_number,
-
-        'ADWIN_detections': adwin_detections,
-        'KSWIN_detections': kswin_detections,
-        'DDM_detections': ddm_detections,
-        'PHT_detections': pht_detections,
-
-        'ADWIN_detections_number': adwin_detections_number,
-        'KSWIN_detections_number': kswin_detections_number,
-        'DDM_detections_number': ddm_detections_number,
-        'PHT_detections_number': pht_detections_number,
-
-        'ADWIN_false_discovery_rate': round(fdr_adwin, 2) if fdr_adwin is not None else None,
-        'KSWIN_false_discovery_rate': round(fdr_kswin, 2) if fdr_kswin is not None else None,
-        'DDM_false_discovery_rate': round(fdr_ddm, 2) if fdr_ddm is not None else None,
-        'PHT_false_discovery_rate': round(fdr_pht, 2) if fdr_pht is not None else None,
-
-        'ADWIN_true_positive_rate': round(tpr_adwin, 2) if tpr_adwin is not None else None,
-        'KSWIN_true_positive_rate': round(tpr_kswin, 2) if tpr_kswin is not None else None,
-        'DDM_true_positive_rate': round(tpr_ddm, 2) if tpr_ddm is not None else None,
-        'PHT_true_positive_rate': round(tpr_pht, 2) if tpr_pht is not None else None,
-
-        'ADWIN_R': round(r_adwin, 2) if r_adwin is not None else samples_number,
-        'KSWIN_R': round(r_kswin, 2) if r_kswin is not None else samples_number,
-        'DDM_R': round(r_ddm, 2) if r_ddm is not None else samples_number,
-        'PHT_R': round(r_pht, 2) if r_pht is not None else samples_number,
-
-        'ADWIN_D1': round(d1_adwin) if d1_adwin is not None else samples_number,
-        'ADWIN_D2': round(d2_adwin) if d2_adwin is not None else samples_number,
-        'KSWIN_D1': round(d1_kswin) if d1_kswin is not None else samples_number,
-        'KSWIN_D2': round(d2_kswin) if d2_kswin is not None else samples_number,
-        'DDM_D1': round(d1_ddm) if d1_ddm is not None else samples_number,
-        'DDM_D2': round(d2_ddm) if d2_ddm is not None else samples_number,
-        'PHT_D1': round(d1_pht) if d1_pht is not None else samples_number,
-        'PHT_D2': round(d2_pht) if d2_pht is not None else samples_number,
-
-        'Ending_Accuracy': metric.get()
     }
+
+    for name, dets in drifts_found.items():
+        tpr, fdr = detection_rates(true_drifts, dets, widths)
+        r = calculate_r(len(true_drifts), len(dets)) if true_drifts else None
+        d1 = D1D2.D1(true_drifts, dets)  # D1/D2 same zwracają None przy pustych listach
+        d2 = D1D2.D2(true_drifts, dets)
+
+        results[f'{name}_detections'] = "; ".join(map(str, dets))
+        results[f'{name}_detections_number'] = len(dets)
+        results[f'{name}_false_discovery_rate'] = round(fdr, 2) if fdr is not None else None
+        results[f'{name}_true_positive_rate'] = round(tpr, 2) if tpr is not None else None
+        results[f'{name}_R'] = round(r, 2) if r is not None else samples_number
+        results[f'{name}_D1'] = round(d1) if d1 is not None else samples_number
+        results[f'{name}_D2'] = round(d2) if d2 is not None else samples_number
+
+    results['Ending_Accuracy'] = metric.get()
+
+    return results
 
 def save_final_results(all_results_list):
     csv_path = Path("../data/results/drift_detectors_results.csv")
@@ -224,7 +195,7 @@ def save_final_results(all_results_list):
 
     # Lista kolumn, które powinny być liczbami całkowitymi
     int_columns = [
-        'Drift_Point', 'Width_Drift', 'Samples_Number',
+        'Samples_Number',
         'ADWIN_all_detections', 'KSWIN_all_detections',
         'DDM_all_detections', 'PHT_all_detections',
         'ADWIN_D1', 'ADWIN_D2', 'KSWIN_D1', 'KSWIN_D2',
@@ -297,16 +268,10 @@ if __name__ == "__main__":
     all_results = []
 
     for dataset in datasets_paths:
-        # definicja modelu ARF (Adaptive Random Forest classifier)
-        rf_model = forest.ARFClassifier(n_models=10, seed=42, drift_detector=None, warning_detector=None)
+        nb_model = build_model()
 
-        one_test_results = evaluate_stream(rf_model, dataset)
+        one_test_results = evaluate_stream(nb_model, dataset)
         all_results.append(one_test_results)
-
-    # ONE DATASET TEST
-    # rf_model = forest.ARFClassifier(n_models=10, seed=42)
-    # one_test_results = evaluate_stream(rf_model, datasets_paths[3])
-    # all_results.append(one_test_results)
 
     save_final_results(all_results)
     end_time = datetime.now()
