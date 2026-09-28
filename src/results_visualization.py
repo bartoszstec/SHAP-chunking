@@ -83,20 +83,29 @@ def plot_datasets(df):
     plt.close()
 
 
+def parse_multi_value(value):
+    """Zamienia komórkę z wartościami rozdzielonymi '; ' na listę liczb.
+    Pandas wczytuje pojedynczą wartość jako liczbę, kilka jako tekst, a brak jako NaN."""
+    if pd.isna(value):
+        return []
+    return [float(v) for v in str(value).split(';') if v.strip()]
+
+
 def plot_drift_timeline(df, dataset_index=0):
-    """Generuje oś czasu zdarzeń dla konkretnego zbioru danych."""
+    """Generuje oś czasu zdarzeń dla konkretnego zbioru danych (obsługuje wiele dryftów)."""
     row = df.iloc[dataset_index]
     dataset_name = row['Dataset']
-    p = row['Drift_Point']
-    w = row['Width_Drift']
+    drift_points = parse_multi_value(row['Drift_Point'])
+    widths = parse_multi_value(row['Width_Drift'])
 
     plt.figure(figsize=(15, 6))
 
-    # 1. Zaznaczanie okna dryftu
-    start_drift = p - w / 2
-    end_drift = p + w / 2
-    plt.axvspan(start_drift, end_drift, color='red', alpha=0.15, label='Okno dryftu (Width)')
-    plt.axvline(p, color='red', linestyle='--', alpha=0.5, label='Punkt centralny (p)')
+    # 1. Zaznaczanie okna każdego dryftu (etykieta tylko raz, żeby legenda się nie powtarzała)
+    for j, (p, w) in enumerate(zip(drift_points, widths)):
+        plt.axvspan(p - w / 2, p + w / 2, color='red', alpha=0.15,
+                    label='Okno dryftu (Width)' if j == 0 else None)
+        plt.axvline(p, color='red', linestyle='--', alpha=0.5,
+                    label='Punkt centralny (p)' if j == 0 else None)
 
     # 2. Rysowanie zdarzeń dla każdego detektora
     detectors = ['ADWIN', 'KSWIN', 'DDM', 'PHT']
@@ -104,23 +113,27 @@ def plot_drift_timeline(df, dataset_index=0):
 
     for i, det in enumerate(detectors):
         col_name = f'{det}_detections'
-        if col_name in df.columns and pd.notna(row[col_name]):
-            events = [float(e) for e in str(row[col_name]).split('; ') if e.strip()]
-            plt.scatter(events, [i] * len(events), label=det, color=colors[i], s=100, edgecolors='black')
+        if col_name in df.columns:
+            events = parse_multi_value(row[col_name])
+            if events:
+                plt.scatter(events, [i] * len(events), label=det, color=colors[i], s=100, edgecolors='black')
 
     plt.yticks(range(len(detectors)), detectors)
     plt.ylim(-1, len(detectors))
-    plt.xlim(0, 10000)  # Twoja liczba rekordów
+    plt.xlim(0, row['Samples_Number'])
     plt.title(f'Oś czasu detekcji dla: {dataset_name}', fontsize=14)
     plt.xlabel('Numer rekordu w strumieniu')
     plt.grid(axis='x', linestyle=':', alpha=0.6)
     plt.legend(loc='upper right')
     plt.tight_layout()
+
+    Path('../data/graphs').mkdir(parents=True, exist_ok=True)
     plt.savefig(f'../data/graphs/timeline_{dataset_name.split(".")[0]}.png')
+    plt.close()
 
 if __name__ == "__main__":
     # Ścieżka do Twojego pliku wygenerowanego przez main.py
-    FILE_PATH = "../data/results/drift_detection_results.csv"
+    FILE_PATH = "../data/results/drift_detectors_results.csv"
 
     results_df = load_data(FILE_PATH)
 
