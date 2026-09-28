@@ -2,21 +2,18 @@ import numpy as np
 
 
 class D1D2:
-    def get_window(tg, W, abrupt_tolerance=250):
+    def get_window(tg, W, detection_delay_tolerance=500):
         """
         Docstring for get_window
 
         :param tg: int: true drift point
         :param W: int: Constant offset
-        :param abrupt_tolerance: int: Tolerance for abrupt drifts
         """
         W = round(W)
         if W <= 0:
             raise ValueError("Window size must be a value above 0")
-        elif W == 1:
-            return tg, tg + abrupt_tolerance
-        else:
-            return tg - 1/2 * W, tg + 1/2 * W
+        #return tg - W, tg + W
+        return tg - W/ 2, tg + W / 2 + detection_delay_tolerance
 
 
 

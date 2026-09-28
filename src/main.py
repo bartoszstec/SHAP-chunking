@@ -120,8 +120,8 @@ def evaluate_stream(model, dataset_path):
 
             # Drift detectors actualization
             d_adwin.update(error)                           # ADWIN
-            #d_kswin.update(error)                           # KSWIN
-            d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
+            d_kswin.update(error)                           # KSWIN
+            #d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
             d_ddm.update(True if error == 1 else False)     # DDM
             d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
@@ -196,8 +196,8 @@ def save_final_results(all_results_list):
     # Lista kolumn, które powinny być liczbami całkowitymi
     int_columns = [
         'Samples_Number',
-        'ADWIN_all_detections', 'KSWIN_all_detections',
-        'DDM_all_detections', 'PHT_all_detections',
+        'ADWIN_detections_number', 'KSWIN_detections_number',
+        'DDM_detections_number', 'PHT_detections_number',
         'ADWIN_D1', 'ADWIN_D2', 'KSWIN_D1', 'KSWIN_D2',
         'DDM_D1', 'DDM_D2', 'PHT_D1', 'PHT_D2'
     ]
