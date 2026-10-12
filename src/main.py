@@ -67,9 +67,9 @@ def evaluate_stream(model, dataset_path):
     # ADWIN Default parameters values: delta → 0.002, clock → 32, max_buckets → 5, min_window_length → 5, grace_period → 20
     d_kswin = drift.KSWIN(seed=42)
     # KSWIN Default parameters values: alpha → 0.005, window_size → 100, stat_size → 30, seed → None, window → None
-    d_ddm = drift.binary.DDM()
+    #d_ddm = drift.binary.DDM()
     # DDM Default parameters values: warm_start → 30, warning_threshold → 2.0, drift_threshold → 3.0
-    d_pht = drift.PageHinkley()
+    #d_pht = drift.PageHinkley()
     # PHT Default parameters values: min_instances → 30, delta → 0.005, threshold → 50, alpha → 0.9999, mode → 'both'
 
     metric = metrics.Accuracy()  # wyświetlenie metryk
@@ -100,7 +100,7 @@ def evaluate_stream(model, dataset_path):
     # -----------------
     # PROPER DATA STREAM
     # -----------------
-    drifts_found = {"ADWIN": [], "KSWIN": [], "DDM": [], "PHT": []}
+    drifts_found = {"ADWIN": [], "KSWIN": []}  # , "DDM": [], "PHT": []}
     for i, (x, y) in enumerate(dataset_init):
         # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
@@ -119,11 +119,12 @@ def evaluate_stream(model, dataset_path):
             error = 0 if y_pred == y else 1
 
             # Drift detectors actualization
-            d_adwin.update(error)                           # ADWIN
-            d_kswin.update(error)                           # KSWIN
-            #d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
-            d_ddm.update(True if error == 1 else False)     # DDM
-            d_pht.update(error)                             # PHT
+            #d_adwin.update(error)                           # ADWIN
+            d_adwin.update(float(true_class_proba))
+            #d_kswin.update(error)                           # KSWIN
+            d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
+            #d_ddm.update(True if error == 1 else False)     # DDM
+            #d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
             # wrzucić wartości SHAP dla konkretnej cechy lub wektor ważności cech
 
@@ -135,12 +136,12 @@ def evaluate_stream(model, dataset_path):
             if d_kswin.drift_detected:
                 # print(f"KSWIN wykrył dryft w rekordzie {i + sample_range}")
                 drifts_found["KSWIN"].append(i + sample_range)
-            if d_ddm.drift_detected:
-                # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
-                drifts_found["DDM"].append(i + sample_range)
-            if d_pht.drift_detected:
-                # print(f"PHT wykrył dryft w rekordzie {i + sample_range}")
-                drifts_found["PHT"].append(i + sample_range)
+            # if d_ddm.drift_detected:
+            #     # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
+            #     drifts_found["DDM"].append(i + sample_range)
+            # if d_pht.drift_detected:
+            #     # print(f"PHT wykrył dryft w rekordzie {i + sample_range}")
+            #     drifts_found["PHT"].append(i + sample_range)
 
 
         # Online learning

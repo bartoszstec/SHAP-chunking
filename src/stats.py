@@ -4,7 +4,8 @@ Usage:
   python stats.py [--csv PATH] [--detectors LIST] [--output PATH] [--n-boot N] [--seed S]
 
 Defaults:
-  csv: ../data/results/drift_detectors_results.csv
+  csv: asked for in the terminal (bare names are looked up in ../data/results/, .csv optional;
+       Enter = ../data/results/drift_detectors_results.csv)
   detectors: ADWIN,KSWIN,DDM,PHT
   output: ../data/results/detector_stats.csv
 
@@ -101,14 +102,25 @@ def detector_stats(df, det, n_boot, rng):
 def main():
     parser = argparse.ArgumentParser(description="Compute summary statistics of detector metrics and display them as a table")
 
-    parser.add_argument("--csv", default="../data/results/drift_detectors_results.csv", help="Path to CSV file")
-    parser.add_argument("--detectors", default="ADWIN,KSWIN,DDM,PHT", help="Comma-separated detector name prefixes")
+    parser.add_argument("--csv", default=None, help="Path to CSV file (if omitted, asked for in the terminal)")
+    parser.add_argument("--detectors", default="ADWIN,KSWIN", help="Comma-separated detector name prefixes") # can add more detectors like DDM,PHT
     parser.add_argument("--output", default="../data/results/detector_stats.csv", help="Path to save the output table (CSV)")
     parser.add_argument("--n-boot", type=int, default=10000, help="Number of bootstrap resamples for 95%% CI")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for bootstrap")
     args = parser.parse_args()
 
-    csv_path = Path(args.csv)
+    if args.csv is None:
+        # Zapytaj o plik w terminalu; sama nazwa pliku jest szukana w ../data/results/
+        results_dir = Path("../data/results")
+        default_csv = results_dir / "drift_detectors_results.csv"
+        answer = input(f"Podaj nazwę pliku CSV z wynikami (Enter = {default_csv.name}): ").strip().strip('"')
+        csv_path = Path(answer) if answer else default_csv
+        if csv_path.suffix == "":
+            csv_path = csv_path.with_suffix(".csv")
+        if not csv_path.exists() and (results_dir / csv_path).exists():
+            csv_path = results_dir / csv_path
+    else:
+        csv_path = Path(args.csv)
     if not csv_path.exists():
         print(f"CSV file not found: {csv_path}", file=sys.stderr)
         sys.exit(1)
