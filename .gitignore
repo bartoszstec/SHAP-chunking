@@ -4,3 +4,5 @@ __pycache__/
 .idea/
 # Pliki danych
 /data
+# Testowanie działania shapa w notatniku
+/src/SHAP_example/
