@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project purpose
 
-Research project comparing concept-drift detectors from `river` on streaming data, with the goal of a SHAP-based drift detector: aggregated SHAP values per chunk (mean |SHAP| per feature) or statistics of how they change over time, fed to ADWIN/KSWIN, later with LASSO-driven window sizing. The SHAP detector is not integrated yet — `main.py` is the detector-benchmark baseline and `src/SHAP_example/` holds the prototype. Comments, prints and plot labels are in Polish; keep that convention.
+Research project comparing concept-drift detectors from `river` on streaming data, with the goal of a SHAP-based drift detector: aggregated SHAP values per chunk (mean |SHAP| per feature) or statistics of how they change over time, fed to ADWIN/KSWIN, later with LASSO-driven window sizing. `main.py` is the detector-benchmark baseline and already computes a per-chunk SHAP timeline (monitoring only); feeding SHAP signals to the detectors is not done yet. `src/SHAP_example/` holds the original batch prototype. Comments, prints and plot labels are in Polish; keep that convention.
 
 ## Environment and commands
 
-- Windows, local virtualenv in `venv/`; dependencies pinned in `requirements.txt` (`../venv/Scripts/python -m pip install -r requirements.txt`). `shap` and `scikit-learn` are installed in the venv (used by the SHAP prototype) but not yet listed in `requirements.txt`. No tests or linter config.
+- Windows, local virtualenv in `venv/`; dependencies pinned in `requirements.txt` (`../venv/Scripts/python -m pip install -r requirements.txt`). `requirements.txt` is UTF-16 encoded (pip reads it; grep does not). No tests or linter config.
 - **All scripts use paths relative to `src/`** (`../data/...`), so run them from inside `src/`:
 
 ```
@@ -26,7 +26,8 @@ Output CSVs are never overwritten: `main.py` and `stats.py` append `_1`, `_2`, �
 
 1. **Datasets** — `data/datasets/*.arff` (gitignored). Ground truth is encoded **only in the filename**, parsed by `parse_filename` in `main.py`:
    `Name_f_F1_F2..._p_P1_P2..._w_W1_W2..._s_S_r_R.arff` — `f` drifting features, `p` drift points, `w` drift widths (one per drift point), `s` sample count, `r` seed. `p`/`w` may be absent (no-drift stream). Target column is `class`.
-2. **`main.py` / `evaluate_stream`** — builds a fresh `river` pipeline per dataset (numeric passthrough + one-hot for strings → `GaussianNB`), warm-starts on the first 100 samples, then does test-then-train. Currently only **ADWIN and KSWIN** (`seed=42`) are active, both fed `true_class_proba` (predicted probability of the true class) rather than the 0/1 error; the error-based updates and DDM/PHT are commented out. The detector-update block is the planned hook for SHAP-based signals. Detection indices are recorded as `i + 100` (absolute stream position).
+2. **`main.py` / `evaluate_stream`** — builds a fresh model per dataset (`MixedNB`: Gaussian likelihood for numeric features + `BernoulliNB(alpha=1)` on one-hot nominal features; plain one-hot → `GaussianNB` saturated to P=0/1 on STAGGER/Agrawal because river's Gaussian has no variance smoothing), warm-starts on the first 100 samples, then does test-then-train. Currently only **ADWIN and KSWIN** (`seed=42`) are active, both fed `true_class_proba` (predicted probability of the true class) rather than the 0/1 error; the error-based updates and DDM/PHT are commented out. The detector-update block is the planned hook for SHAP-based signals. Detection indices are recorded as `i + 100` (absolute stream position).
+   **SHAP monitoring:** every `SHAP_WINDOW` (100) records, `river_gnb_shap.analytic_shap` explains the whole chunk exactly. NB is additive in log space, so each feature's SHAP value is its own log-likelihood term minus that term's mean over the background (the warm-up rows), in centred-logit space. It works for MixedNB or any river NB/pipeline exposing `joint_log_likelihood`, and was verified against brute-force Shapley enumeration. The chunk is explained before `learn_one`. Each row holds `record`, `aggregated_shap` (sum over features of mean |SHAP|) and `shap_<feature>`. The CSV + PNG go to `SHAP_DIR` (`../data/results/shap_timeline_mixednb_logitshap`) and are **overwritten** on rerun; older runs live in sibling `shap_timeline_*` folders.
 3. **Metrics** — `D1D2_metrics.py` holds static-style methods on class `D1D2` (called as `D1D2.tpr(...)`, no instance):
    - `get_window(tg, W)` → `[tg - W/2, tg + W/2 + 500]` (500 = detection-delay tolerance). All window-based metrics (TPR, FDR, FEDP, EDDR) go through it.
    - `D1` = mean distance from each detection to nearest true drift; `D2` = mean distance from each true drift to nearest detection.
