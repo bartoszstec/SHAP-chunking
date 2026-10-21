@@ -5,7 +5,7 @@ import math
 import numbers
 from scipy import special
 from river import base, stream, naive_bayes, metrics, drift
-from river_gnb_shap import analytic_shap
+from shap_explainer import StreamShapExplainer, aggregate_shap, build_shap_reference
 from D1D2_metrics import D1D2
 from datetime import datetime
 import numpy as np
@@ -58,6 +58,52 @@ class MixedNB(base.Classifier):
         lse = special.logsumexp(list(jll.values()))
         return {c: math.exp(ll - lse) for c, ll in jll.items()}
 
+    def predict_proba_many(self, X, classes):
+        """Wektorowa wersja predict_proba_one dla DataFrame (te same wzory, w tym 10e-10).
+        Zwraca (n, len(classes)); klasa nieznana modelowi -> 0, model pusty -> rozkład jednostajny.
+        Potrzebne dla SHAP: PermutationExplainer wywołuje model na tysiącach zamaskowanych wierszy."""
+        known = list(self.bernoulli.class_counts)
+        if not known:
+            return np.full((len(X), len(classes)), 1 / len(classes))
+        total = sum(self.bernoulli.class_counts.values())
+        jll = np.tile([math.log(self.bernoulli.class_counts[c] / total) for c in known], (len(X), 1))
+
+        for col in X.columns:
+            values = X[col].to_numpy()
+            if isinstance(values[0], numbers.Number):
+                # Gaussian: log(10e-10 + pdf); brak statystyk lub wariancja 0 -> pdf = 0 (jak w River)
+                for k, c in enumerate(known):
+                    g = self.gaussian.gaussians.get(c, {}).get(col)
+                    var = g._var.get() if g is not None else 0.0
+                    if var:
+                        pdf = np.exp((values.astype(float) - g.mu) ** 2 / (-2 * var)) / math.sqrt(math.tau * var)
+                    else:
+                        pdf = np.zeros(len(values))
+                    jll[:, k] += np.log(10e-10 + pdf)
+
+        # Bernoulli: suma log(1 - p) po wszystkich znanych kolumnach one-hot, a dla obecnych kolumn
+        # zamiana log(1 - p) na log(p). Kategoria nieznana modelowi nie ma kolumny -> brak wkładu.
+        bern = self.bernoulli
+        absent = np.zeros(len(known))
+        present = {}  # (cecha, wartość) -> wektor log(p) - log(1 - p) po klasach
+        for key in bern.feature_counts:
+            p = np.array([bern.p_feature_given_class(key, c) for c in known])
+            absent += np.log(10e-10 + (1.0 - p))
+            present[key] = np.log(10e-10 + p) - np.log(10e-10 + (1.0 - p))
+        jll += absent
+        zero = np.zeros(len(known))
+        for col in X.columns:
+            values = X[col].to_numpy()
+            if not isinstance(values[0], numbers.Number):
+                jll += np.array([present.get((col, v), zero) for v in values])
+
+        proba = np.exp(jll - special.logsumexp(jll, axis=1, keepdims=True))
+        out = np.zeros((len(X), len(classes)))
+        for k, c in enumerate(known):
+            if c in classes:
+                out[:, classes.index(c)] = proba[:, k]
+        return out
+
     @property
     def _multiclass(self):
         return True
@@ -71,33 +117,14 @@ def build_model():
 # SHAP - parametry
 # ---------------
 SHAP_WINDOW = 100  # co ile rekordów liczyć jeden punkt szeregu SHAP
-SHAP_DIR = Path("../data/results/shap_timeline_mixednb_logitshap")
+SHAP_N_PERMUTATIONS = 5  # permutacje na próbkę w PermutationExplainer (każda w przód i wstecz)
+SHAP_MAX_BACKGROUND = 50  # maks. liczba wierszy tła w maskerze
+SHAP_DIR = Path("../data/results/shap_timeline_mixednb_permutation")
 
 
 # -------------
 # SHAP - helpers
 # -------------
-def decode(v):
-    return v.decode('utf-8') if isinstance(v, bytes) else v
-
-
-def aggregate_shap(values):
-    """Zwraca (SHAP agregowany - skalar, średni |SHAP| per cecha - wektor M).
-    values: (n_samples, M, n_classes) - analityczne SHAP w przestrzeni wycentrowanych logitów."""
-    per_feature = np.abs(values).mean(axis=(0, 2))  # średnia po próbkach i klasach -> (M,)
-    return per_feature.sum(), per_feature
-
-
-def build_shap_reference(initial_data):
-    """Tło SHAP = dane z rozgrzewki w oryginalnej postaci (słowniki).
-    Pierwszy rekord .arff to ({}, None) - pomijamy puste rekordy, inaczej feature_names = []."""
-    valid_data = [(x, decode(y)) for x, y in initial_data if x and y is not None]
-    feature_names = list(valid_data[0][0].keys())
-    classes = sorted({y for _, y in valid_data})
-    background_rows = [x for x, _ in valid_data]
-    return background_rows, feature_names, classes
-
-
 def save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths):
     if not shap_timeline:
         return
@@ -115,7 +142,7 @@ def save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths):
         else:
             ax.axvline(p, color='red', linestyle='--')
     ax.set_xlabel('rekord')
-    ax.set_ylabel('SHAP agregowany (logity)')
+    ax.set_ylabel('SHAP agregowany (prawdopodobieństwa)')
     ax.set_title(stem)
     fig.tight_layout()
     fig.savefig(SHAP_DIR / f"{stem}.png")
@@ -166,9 +193,9 @@ def evaluate_stream(model, dataset_path):
     # ADWIN Default parameters values: delta → 0.002, clock → 32, max_buckets → 5, min_window_length → 5, grace_period → 20
     d_kswin = drift.KSWIN(seed=42)
     # KSWIN Default parameters values: alpha → 0.005, window_size → 100, stat_size → 30, seed → None, window → None
-    #d_ddm = drift.binary.DDM()
+    d_ddm = drift.binary.DDM()
     # DDM Default parameters values: warm_start → 30, warning_threshold → 2.0, drift_threshold → 3.0
-    #d_pht = drift.PageHinkley()
+    d_pht = drift.PageHinkley()
     # PHT Default parameters values: min_instances → 30, delta → 0.005, threshold → 50, alpha → 0.9999, mode → 'both'
 
     metric = metrics.Accuracy()  # wyświetlenie metryk
@@ -200,15 +227,19 @@ def evaluate_stream(model, dataset_path):
     # SHAP EXPLAINER
     # --------------
     # Tło = dane z rozgrzewki, model już wytrenowany.
-    # SHAP liczony analitycznie (GaussianNB jest addytywny w logitach) - dokładnie, bez explainera.
+    # PermutationExplainer na predict_proba - explainer trzyma referencję do modelu, więc zawsze
+    # wyjaśnia jego bieżący stan (model uczy się w miejscu).
     background_rows, feature_names, classes = build_shap_reference(initial_data)
+    shap_explainer = StreamShapExplainer(model, background_rows, feature_names, classes,
+                                         n_permutations=SHAP_N_PERMUTATIONS,
+                                         max_background=SHAP_MAX_BACKGROUND)
     shap_buffer = []  # surowe próbki bieżącego okna (słowniki cech)
     shap_timeline = []  # jeden wiersz na okno: record, aggregated_shap, shap_<cecha>...
 
     # -----------------
     # PROPER DATA STREAM
     # -----------------
-    drifts_found = {"ADWIN": [], "KSWIN": []}  # , "DDM": [], "PHT": []}
+    drifts_found = {"ADWIN": [], "KSWIN": [] , "DDM": [], "PHT": []}
     for i, (x, y) in enumerate(dataset_init):
         # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
@@ -227,12 +258,12 @@ def evaluate_stream(model, dataset_path):
             error = 0 if y_pred == y else 1
 
             # Drift detectors actualization
-            #d_adwin.update(error)                           # ADWIN
-            d_adwin.update(float(true_class_proba))
-            #d_kswin.update(error)                           # KSWIN
-            d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
-            #d_ddm.update(True if error == 1 else False)     # DDM
-            #d_pht.update(error)                             # PHT
+            d_adwin.update(error)                           # ADWIN
+            #d_adwin.update(float(true_class_proba))
+            d_kswin.update(error)                           # KSWIN
+            #d_kswin.update(float(true_class_proba))       # KSWIN - alternative approach using class probability
+            d_ddm.update(True if error == 1 else False)     # DDM
+            d_pht.update(error)                             # PHT
             # Zamiast wrzucać do ADWIN-a informację o błędzie klasyfikacji (0 lub 1)
             # wrzucić wartości SHAP dla konkretnej cechy lub wektor ważności cech
 
@@ -244,23 +275,23 @@ def evaluate_stream(model, dataset_path):
             if d_kswin.drift_detected:
                 # print(f"KSWIN wykrył dryft w rekordzie {i + sample_range}")
                 drifts_found["KSWIN"].append(i + sample_range)
-            # if d_ddm.drift_detected:
-            #     # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
-            #     drifts_found["DDM"].append(i + sample_range)
-            # if d_pht.drift_detected:
-            #     # print(f"PHT wykrył dryft w rekordzie {i + sample_range}")
-            #     drifts_found["PHT"].append(i + sample_range)
+            if d_ddm.drift_detected:
+                # print(f"DDM wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["DDM"].append(i + sample_range)
+            if d_pht.drift_detected:
+                # print(f"PHT wykrył dryft w rekordzie {i + sample_range}")
+                drifts_found["PHT"].append(i + sample_range)
 
         # ------------------------------
         # SHAP agregowany - monitorowanie
         # ------------------------------
         shap_buffer.append(x)
         if len(shap_buffer) == SHAP_WINDOW:
-            # Wyjaśniamy całe okno - koszt liniowy, nie trzeba losować próbek
-            shap_values, _ = analytic_shap(model, shap_buffer, background_rows, feature_names, classes)
+            # Wyjaśniamy całe okno przed learn_one bieżącej próbki
+            shap_values = shap_explainer.explain(shap_buffer)
 
-            agg, per_feature = aggregate_shap(shap_values)
-            row = {'record': i + sample_range, 'aggregated_shap': agg}
+            per_feature = aggregate_shap(shap_values)
+            row = {'record': i + sample_range}
             row.update({f'shap_{f}': v for f, v in zip(feature_names, per_feature)})
             shap_timeline.append(row)
             shap_buffer.clear()
