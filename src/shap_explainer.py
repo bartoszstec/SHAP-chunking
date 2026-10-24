@@ -70,7 +70,7 @@ class StreamShapExplainer:
 
 
 def aggregate_shap(values):
-    """Zwraca (SHAP agregowany - skalar, średni |SHAP| per cecha - wektor M).
+    """Zwraca średni |SHAP| per cecha - wektor (M,).
     values: (n_samples, M, n_classes). Średnia po próbkach i klasach = S_agg z artykułu (Eq. 2)."""
     per_feature = np.abs(values).mean(axis=(0, 2))
     return per_feature

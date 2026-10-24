@@ -103,7 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compute summary statistics of detector metrics and display them as a table")
 
     parser.add_argument("--csv", default=None, help="Path to CSV file (if omitted, asked for in the terminal)")
-    parser.add_argument("--detectors", default="ADWIN,KSWIN,DDM,PHT", help="Comma-separated detector name prefixes") # can add more detectors like DDM,PHT
+    parser.add_argument("--detectors", default="ADWIN,KSWIN,DDM,PHT,SHAP", help="Comma-separated detector name prefixes") # can add more detectors like DDM,PHT
     parser.add_argument("--output", default="../data/results/detector_stats.csv", help="Path to save the output table (CSV)")
     parser.add_argument("--n-boot", type=int, default=10000, help="Number of bootstrap resamples for 95%% CI")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for bootstrap")

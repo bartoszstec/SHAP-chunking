@@ -6,6 +6,7 @@ import numbers
 from scipy import special
 from river import base, stream, naive_bayes, metrics, drift
 from shap_explainer import StreamShapExplainer, aggregate_shap, build_shap_reference
+from shap_detector import ShapChunkDetector
 from D1D2_metrics import D1D2
 from datetime import datetime
 import numpy as np
@@ -116,16 +117,21 @@ def build_model():
 # ---------------
 # SHAP - parametry
 # ---------------
-SHAP_WINDOW = 100  # co ile rekordów liczyć jeden punkt szeregu SHAP
+SHAP_WINDOW = 100  # długość chunku L - co ile rekordów liczyć jeden wektor S_agg
 SHAP_N_PERMUTATIONS = 5  # permutacje na próbkę w PermutationExplainer (każda w przód i wstecz)
 SHAP_MAX_BACKGROUND = 50  # maks. liczba wierszy tła w maskerze
-SHAP_DIR = Path("../data/results/shap_timeline_mixednb_permutation")
+# Detektor SHAP (artykuł, Algorytmy 1-2). B=4: przy rozgrzewce 100 i L=100 tyle chunków mieści się
+# przed najwcześniejszym dryfem (p=500); W=2 i alpha=0.001 jak w artykule.
+SHAP_B = 4  # liczba chunków baseline'u
+SHAP_W = 2  # okno uśredniania (w chunkach)
+SHAP_ALPHA = 0.001  # tolerancja percentyli progów
+SHAP_DIR = Path("../data/results/shap_timeline_chunk_mixednb_permutation")
 
 
 # -------------
 # SHAP - helpers
 # -------------
-def save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths):
+def save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths, detections):
     if not shap_timeline:
         return
     SHAP_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,16 +139,21 @@ def save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths):
     df = pd.DataFrame(shap_timeline)
     df.to_csv(SHAP_DIR / f"{stem}.csv", index=False)
 
-    # Wykres: SHAP agregowany + prawdziwe dryfty
+    # Wykres: S_agg każdej cechy (oś x = pierwszy rekord chunku) + prawdziwe dryfty + detekcje SHAP
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(df['record'], df['aggregated_shap'])
+    for col in df.columns:
+        if col.startswith('shap_'):
+            ax.plot(df['record'], df[col], label=col[len('shap_'):])
     for p, w in zip(true_drifts, widths or [0] * len(true_drifts)):
         if w > 0:
             ax.axvspan(p - w / 2, p + w / 2, alpha=0.2, color='red')
         else:
             ax.axvline(p, color='red', linestyle='--')
-    ax.set_xlabel('rekord')
-    ax.set_ylabel('SHAP agregowany (prawdopodobieństwa)')
+    for d in detections:
+        ax.axvline(d, color='black', linestyle=':')
+    ax.set_xlabel('rekord (początek chunku); czarne kropkowane = detekcje SHAP')
+    ax.set_ylabel('S_agg (prawdopodobieństwa)')
+    ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.0, 1.0))
     ax.set_title(stem)
     fig.tight_layout()
     fig.savefig(SHAP_DIR / f"{stem}.png")
@@ -226,20 +237,23 @@ def evaluate_stream(model, dataset_path):
     # --------------
     # SHAP EXPLAINER
     # --------------
-    # Tło = dane z rozgrzewki, model już wytrenowany.
-    # PermutationExplainer na predict_proba - explainer trzyma referencję do modelu, więc zawsze
-    # wyjaśnia jego bieżący stan (model uczy się w miejscu).
+    # Tło = dane z rozgrzewki. Jak w artykule: dla każdego chunku nowy model uczony tylko na tym
+    # chunku i wyjaśniany na tym samym chunku - model "zapomina" z definicji, a S_agg nie ma trendu
+    # wynikającego z narastającej wiedzy modelu inkrementalnego. Model główny (detektory klasyczne)
+    # jest od tego niezależny.
     background_rows, feature_names, classes = build_shap_reference(initial_data)
     shap_explainer = StreamShapExplainer(model, background_rows, feature_names, classes,
                                          n_permutations=SHAP_N_PERMUTATIONS,
                                          max_background=SHAP_MAX_BACKGROUND)
-    shap_buffer = []  # surowe próbki bieżącego okna (słowniki cech)
-    shap_timeline = []  # jeden wiersz na okno: record, aggregated_shap, shap_<cecha>...
+    shap_detector = ShapChunkDetector(B=SHAP_B, W=SHAP_W, alpha=SHAP_ALPHA)
+    shap_buffer = []  # próbki bieżącego chunku: (x, y)
+    shap_timeline = []  # jeden wiersz na chunk: record (pierwszy rekord chunku), shap_<cecha>...
+    shap_drifted_features = []  # "rekord: cecha, cecha" dla każdej detekcji SHAP
 
     # -----------------
     # PROPER DATA STREAM
     # -----------------
-    drifts_found = {"ADWIN": [], "KSWIN": [] , "DDM": [], "PHT": []}
+    drifts_found = {"ADWIN": [], "KSWIN": [] , "DDM": [], "PHT": [], "SHAP": []}
     for i, (x, y) in enumerate(dataset_init):
         # Repair types
         y = y.decode('utf-8') if isinstance(y, bytes) else y
@@ -285,15 +299,25 @@ def evaluate_stream(model, dataset_path):
         # ------------------------------
         # SHAP agregowany - monitorowanie
         # ------------------------------
-        shap_buffer.append(x)
+        shap_buffer.append((x, y))
         if len(shap_buffer) == SHAP_WINDOW:
-            # Wyjaśniamy całe okno przed learn_one bieżącej próbki
-            shap_values = shap_explainer.explain(shap_buffer)
+            chunk_model = build_model()
+            for cx, cy in shap_buffer:
+                chunk_model.learn_one(cx, cy)
+            shap_explainer.model = chunk_model
+            per_feature = aggregate_shap(shap_explainer.explain([cx for cx, _ in shap_buffer]))
 
-            per_feature = aggregate_shap(shap_values)
-            row = {'record': i + sample_range}
+            # Indeks detekcji = pierwszy rekord chunku (artykuł: i * L)
+            chunk_start = i - SHAP_WINDOW + 1 + sample_range
+            row = {'record': chunk_start}
             row.update({f'shap_{f}': v for f, v in zip(feature_names, per_feature)})
             shap_timeline.append(row)
+
+            drifted = shap_detector.update(per_feature)
+            if drifted.size:
+                drifts_found["SHAP"].append(chunk_start)
+                shap_drifted_features.append(
+                    f"{chunk_start}: " + ", ".join(feature_names[j] for j in drifted))
             shap_buffer.clear()
 
         # Online learning
@@ -314,7 +338,7 @@ def evaluate_stream(model, dataset_path):
     # true_drifts_number = len(true_drifts) # number of true drifts
 
     # Zapis szeregu SHAP (CSV + wykres) dla tego zbioru
-    save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths)
+    save_shap_timeline(shap_timeline, dataset_path, true_drifts, widths, drifts_found["SHAP"])
 
     # Returns a dictionary with results for this dataset
     results = {
@@ -338,6 +362,8 @@ def evaluate_stream(model, dataset_path):
         results[f'{name}_D1'] = round(d1) if d1 is not None else samples_number
         results[f'{name}_D2'] = round(d2) if d2 is not None else samples_number
 
+    # Interpretowalność detektora SHAP: które cechy przekroczyły progi przy każdej detekcji
+    results['SHAP_drifted_features'] = " | ".join(shap_drifted_features)
     results['Ending_Accuracy'] = metric.get()
 
     return results
@@ -352,9 +378,9 @@ def save_final_results(all_results_list):
     int_columns = [
         'Samples_Number',
         'ADWIN_detections_number', 'KSWIN_detections_number',
-        'DDM_detections_number', 'PHT_detections_number',
+        'DDM_detections_number', 'PHT_detections_number', 'SHAP_detections_number',
         'ADWIN_D1', 'ADWIN_D2', 'KSWIN_D1', 'KSWIN_D2',
-        'DDM_D1', 'DDM_D2', 'PHT_D1', 'PHT_D2'
+        'DDM_D1', 'DDM_D2', 'PHT_D1', 'PHT_D2', 'SHAP_D1', 'SHAP_D2'
     ]
 
     # Wymuszamy typ Int64 (przez duże I) - on obsługuje <null> i nie robi floatów
